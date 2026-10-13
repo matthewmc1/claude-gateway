@@ -1,0 +1,26 @@
+# Copy to terraform.tfvars and edit. Never commit terraform.tfvars.
+project_id = "my-gcp-project"
+region     = "europe-west2"
+
+# The admins, defined once at setup. Each gets a generated password (terraform output -json admin_credentials)
+# and their own gateway key, so the audit trail shows who changed a budget. Add or remove people here and apply.
+admin_users = [
+  { email = "platform-lead@example.com", name = "Platform Lead" },
+  { email = "finance@example.com" },
+]
+
+# Only these email domains can sign in to the gateway through your identity provider.
+allowed_email_domains = ["example.com"]
+
+# Sign-in with Google accounts. Create a "Web application" OAuth client whose redirect URI is <public_url>/oauth/callback.
+oidc_client_id = "123456789-abc.apps.googleusercontent.com"
+# oidc_client_secret: pass it as an environment variable instead:  export TF_VAR_oidc_client_secret=...
+
+# What engineers' Claude Code connects to. localhost works with the local proxy; use an internal https hostname for a team.
+public_url = "http://localhost:8891"
+
+# Models people may use. The first entry is the default.
+# allowed_models = ["claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5"]
+
+# For a throwaway trial only: allow `terraform destroy` to delete the database.
+# db_deletion_protection = false

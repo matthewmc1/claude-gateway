@@ -1,0 +1,47 @@
+# Claude apps gateway on Cloud Run. Rendered by 03-secrets.sh into Secret Manager (gateway-config).
+# ${VAR} values here are filled by the gateway at boot from Cloud Run secrets, so they stay literal.
+# Reference: https://code.claude.com/docs/en/claude-apps-gateway-on-gcp
+
+listen:
+  host: 0.0.0.0
+  port: 8080
+  public_url: ${PUBLIC_URL}             # rendered; http://localhost:8791 when reached through `gcloud run services proxy`
+  trusted_proxies: [169.254.0.0/16]     # Cloud Run front end, for real client IPs in audit events
+
+oidc:
+  issuer: https://accounts.google.com
+  client_id: ${OIDC_CLIENT_ID}
+  client_secret: ${OIDC_CLIENT_SECRET}
+  allowed_email_domains: [${ALLOWED_EMAIL_DOMAIN}]
+  # Google ignores offline_access; these two yield refresh tokens.
+  scopes: [openid, profile, email]
+  extra_auth_params: { access_type: offline, prompt: consent }
+
+session:
+  jwt_secret: ${GATEWAY_JWT_SECRET}
+  ttl_hours: 1
+
+store:
+  postgres_url: ${GATEWAY_POSTGRES_URL}
+
+upstreams:
+  - provider: vertex
+    region: ${VERTEX_REGION}
+    project_id: ${PROJECT_ID}
+    auth: {}                            # Application Default Credentials: the claude-gateway service account
+
+auto_include_builtin_models: true
+
+admin:
+  write_keys:
+    - { id: budget-app, key: "${GATEWAY_ADMIN_WRITE_KEY}" }
+  read_keys:
+    - { id: budget-app-read, key: "${GATEWAY_ADMIN_READ_KEY}" }
+  blocked_message: "Spend cap reached. Ask the platform team for an increase."
+
+managed:
+  policies:
+    - match: {}
+      code:
+        enforceAvailableModels: true
+        availableModels: [claude-sonnet-5-5, claude-opus-5-5, claude-haiku-5-5]   # first entry is the Default (Sonnet 5.5)

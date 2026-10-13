@@ -1,0 +1,107 @@
+# Receives the OTLP the gateway relays from Claude Code / Claude Desktop clients
+# and stores it in ClickHouse. User identity (user.email, user.groups, user.id)
+# is stamped by the client from its gateway-issued JWT, so it is trustworthy.
+#
+# Schema is created by the exporter on first write (fine for dev). For prod,
+# set create_schema: false and manage DDL yourself (see clickhouse/).
+
+extensions:
+  # Remembers file offsets so a collector restart doesn't re-ingest the audit log.
+  file_storage:
+    directory: /var/lib/otelcol/storage
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+  # The gateway writes one JSON audit event per line (evt=inference, config.load,
+  # auth rejections...) mixed with plain operational log lines. This is the
+  # gateway-side record of EVERY request, including ones the client never
+  # reports (rejected, rate limited, upstream errors).
+  # In Cloud Run, replace with the Cloud Logging -> collector path (README).
+  filelog/gateway:
+    include: [/var/log/gateway/gateway.log]
+    start_at: beginning
+    storage: file_storage
+    resource:
+      service.name: claude-gateway
+    operators:
+      - type: filter
+        expr: 'body not matches "^\\{"'
+      - type: json_parser
+        parse_from: body
+        timestamp:
+          parse_from: attributes.ts
+          layout: '%Y-%m-%dT%H:%M:%S.%LZ'
+
+  # The upstream failure CAUSE (e.g. Vertex quota exhausted, model not found)
+  # is only written to the plain-text operational log, keyed by request_id.
+  # Capture those lines as evt=upstream.error so they join to the audit events.
+  filelog/gateway_ops:
+    include: [/var/log/gateway/gateway.log]
+    start_at: beginning
+    storage: file_storage
+    resource:
+      service.name: claude-gateway
+    operators:
+      - type: filter
+        expr: 'body not matches "^\\[gateway\\] \\S+ warn vertex upstream \\d+ request_id="'
+      - type: regex_parser
+        regex: '^\[gateway\] (?P<ts>\S+) warn vertex upstream (?P<upstream_status>\d+) request_id=(?P<request_id>[^:]+): (?P<upstream_error>.*)$'
+        timestamp:
+          parse_from: attributes.ts
+          layout: '%Y-%m-%dT%H:%M:%S.%LZ'
+      - type: add
+        field: attributes.evt
+        value: upstream.error
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+  batch:
+    timeout: 5s
+    send_batch_size: 2048
+
+exporters:
+  clickhouse:
+    endpoint: tcp://clickhouse:9000?dial_timeout=10s
+    database: otel
+    username: otel
+    password: ${env:CLICKHOUSE_PASSWORD}
+    async_insert: true
+    ttl: 4320h          # 180 days of raw telemetry; tune to your retention policy
+    compress: lz4
+    create_schema: true
+    logs_table_name: otel_logs
+    traces_table_name: otel_traces
+    metrics_tables:
+      gauge: { name: otel_metrics_gauge }
+      sum: { name: otel_metrics_sum }
+      summary: { name: otel_metrics_summary }
+      histogram: { name: otel_metrics_histogram }
+      exponential_histogram: { name: otel_metrics_exp_histogram }
+    timeout: 10s
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+
+service:
+  extensions: [file_storage]
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [clickhouse]
+    logs:
+      receivers: [otlp, filelog/gateway, filelog/gateway_ops]
+      processors: [memory_limiter, batch]
+      exporters: [clickhouse]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [clickhouse]

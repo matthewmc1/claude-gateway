@@ -1,0 +1,950 @@
+{
+ "uid": "gw-budgets",
+ "title": "Claude gateway: budgets and tracking",
+ "tags": [
+  "claude",
+  "gateway"
+ ],
+ "timezone": "browser",
+ "schemaVersion": 39,
+ "version": 1,
+ "editable": true,
+ "graphTooltip": 1,
+ "refresh": "30s",
+ "time": {
+  "from": "now-24h",
+  "to": "now"
+ },
+ "templating": {
+  "list": [
+   {
+    "name": "data",
+    "label": "Data",
+    "type": "custom",
+    "query": "all,real,loadtest",
+    "current": {
+     "text": "all",
+     "value": "all"
+    },
+    "options": [
+     {
+      "text": "all",
+      "value": "all",
+      "selected": true
+     },
+     {
+      "text": "real",
+      "value": "real",
+      "selected": false
+     },
+     {
+      "text": "loadtest",
+      "value": "loadtest",
+      "selected": false
+     }
+    ],
+    "description": "real = calls that went to the model provider. loadtest = canned replies from load_test_mode."
+   },
+   {
+    "name": "request_id",
+    "label": "Request ID",
+    "type": "textbox",
+    "query": "",
+    "current": {
+     "text": "",
+     "value": ""
+    },
+    "options": [
+     {
+      "selected": true,
+      "text": "",
+      "value": ""
+     }
+    ],
+    "description": "Paste a request_id to show only that call in the tracker."
+   }
+  ]
+ },
+ "links": [
+  {
+   "title": "Overview",
+   "type": "link",
+   "url": "/d/gw-overview",
+   "icon": "dashboard",
+   "targetBlank": false
+  }
+ ],
+ "panels": [
+  {
+   "id": 1,
+   "type": "stat",
+   "title": "Active caps",
+   "datasource": {
+    "type": "postgres",
+    "uid": "gateway-pg"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 4,
+    "h": 4
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "postgres",
+      "uid": "gateway-pg"
+     },
+     "rawSql": "SELECT count(*) FROM spend_limits",
+     "format": "table"
+    }
+   ],
+   "options": {
+    "colorMode": "none",
+    "graphMode": "none",
+    "textMode": "value",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "values": false
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "#3987e5"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#3987e5",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "description": "Spend limits currently in force (org, group and per-user)."
+  },
+  {
+   "id": 2,
+   "type": "stat",
+   "title": "Default monthly cap / person",
+   "datasource": {
+    "type": "postgres",
+    "uid": "gateway-pg"
+   },
+   "gridPos": {
+    "x": 4,
+    "y": 0,
+    "w": 4,
+    "h": 4
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "postgres",
+      "uid": "gateway-pg"
+     },
+     "rawSql": "SELECT amount/100 FROM spend_limits WHERE scope_type='organization' AND period='monthly'",
+     "format": "table"
+    }
+   ],
+   "options": {
+    "colorMode": "none",
+    "graphMode": "none",
+    "textMode": "value",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "values": false
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "#3987e5"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#3987e5",
+        "value": null
+       }
+      ]
+     },
+     "unit": "currencyUSD",
+     "decimals": 0
+    },
+    "overrides": []
+   },
+   "description": "Org-wide default: every person gets this cap each month unless they have their own. It is a per-seat default, not a shared pool."
+  },
+  {
+   "id": 3,
+   "type": "stat",
+   "title": "Default daily cap / person",
+   "datasource": {
+    "type": "postgres",
+    "uid": "gateway-pg"
+   },
+   "gridPos": {
+    "x": 8,
+    "y": 0,
+    "w": 4,
+    "h": 4
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "postgres",
+      "uid": "gateway-pg"
+     },
+     "rawSql": "SELECT amount/100 FROM spend_limits WHERE scope_type='organization' AND period='daily'",
+     "format": "table"
+    }
+   ],
+   "options": {
+    "colorMode": "none",
+    "graphMode": "none",
+    "textMode": "value",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "values": false
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "#3987e5"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#3987e5",
+        "value": null
+       }
+      ]
+     },
+     "unit": "currencyUSD",
+     "decimals": 0
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 4,
+   "type": "stat",
+   "title": "Adjustments in range",
+   "datasource": {
+    "type": "postgres",
+    "uid": "gateway-pg"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 0,
+    "w": 4,
+    "h": 4
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "postgres",
+      "uid": "gateway-pg"
+     },
+     "rawSql": "SELECT count(*) FROM admin_audit WHERE $__timeFilter(at)",
+     "format": "table"
+    }
+   ],
+   "options": {
+    "colorMode": "none",
+    "graphMode": "none",
+    "textMode": "value",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "values": false
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "#d95926"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#d95926",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "description": "Creates, raises, lowers and deletions of spend limits in the selected time range."
+  },
+  {
+   "id": 5,
+   "type": "stat",
+   "title": "Last adjustment",
+   "datasource": {
+    "type": "postgres",
+    "uid": "gateway-pg"
+   },
+   "gridPos": {
+    "x": 16,
+    "y": 0,
+    "w": 4,
+    "h": 4
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "postgres",
+      "uid": "gateway-pg"
+     },
+     "rawSql": "SELECT extract(epoch FROM max(at))*1000 FROM admin_audit",
+     "format": "table"
+    }
+   ],
+   "options": {
+    "colorMode": "none",
+    "graphMode": "none",
+    "textMode": "value",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "values": false
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "#3987e5"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#3987e5",
+        "value": null
+       }
+      ]
+     },
+     "unit": "dateTimeFromNow"
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 6,
+   "type": "stat",
+   "title": "Blocked by spend cap",
+   "datasource": {
+    "type": "grafana-clickhouse-datasource",
+    "uid": "clickhouse"
+   },
+   "gridPos": {
+    "x": 20,
+    "y": 0,
+    "w": 4,
+    "h": 4
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-clickhouse-datasource",
+      "uid": "clickhouse"
+     },
+     "rawSql": "SELECT countIf(outcome='spend_cap') FROM otel.v_gateway_requests WHERE $__timeFilter(ts) AND ('$data' = 'all' OR ('$data' = 'real' AND NOT is_load_test) OR ('$data' = 'loadtest' AND is_load_test))",
+     "format": 1,
+     "editorType": "sql",
+     "queryType": "table"
+    }
+   ],
+   "options": {
+    "colorMode": "none",
+    "graphMode": "none",
+    "textMode": "value",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "values": false
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "#ec835a"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#ec835a",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "description": "Requests the gateway refused with 429 because a cap was reached (range)."
+  },
+  {
+   "id": 7,
+   "type": "table",
+   "title": "Spend caps in force",
+   "datasource": {
+    "type": "postgres",
+    "uid": "gateway-pg"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 4,
+    "w": 16,
+    "h": 9
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "postgres",
+      "uid": "gateway-pg"
+     },
+     "rawSql": "SELECT CASE sl.scope_type WHEN 'organization' THEN 'Everyone (default)'\n        WHEN 'user' THEN coalesce(e.email, sl.scope_id) ELSE 'Group ' || sl.scope_id END AS \"who\", sl.scope_type AS scope, sl.period, (sl.amount/100.0)::numeric(12,2) AS cap_usd,\n        sl.updated_at AS \"updated\", replace(sl.created_by,'admin-key:','') AS \"set by\"\n     FROM spend_limits sl LEFT JOIN principal_emails e ON e.principal = sl.scope_id\n     ORDER BY CASE sl.scope_type WHEN 'organization' THEN 0 WHEN 'rbac_group' THEN 1 ELSE 2 END, sl.period",
+     "format": "table"
+    }
+   ],
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "cellOptions": {
+       "type": "auto"
+      }
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "cap_usd"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "currencyUSD"
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "id"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 300
+       }
+      ]
+     }
+    ]
+   },
+   "description": "Org and group caps are per-person defaults, not shared pools. A per-user cap overrides them for that person (higher or lower). Each period is enforced independently."
+  },
+  {
+   "id": 8,
+   "type": "table",
+   "title": "Spend ledger (metered usage)",
+   "datasource": {
+    "type": "postgres",
+    "uid": "gateway-pg"
+   },
+   "gridPos": {
+    "x": 16,
+    "y": 4,
+    "w": 8,
+    "h": 9
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "postgres",
+      "uid": "gateway-pg"
+     },
+     "rawSql": "SELECT coalesce(e.email, s.principal) AS \"who\", s.period, round((s.cents/100)::numeric,4) AS usd, s.updated_at AS \"updated\"\n     FROM spend s LEFT JOIN principal_emails e ON e.principal = s.principal ORDER BY s.updated_at DESC LIMIT 100",
+     "format": "table"
+    }
+   ],
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto"
+     },
+     "noValue": "Nothing metered yet. Real model calls are needed."
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "usd"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "currencyUSD"
+       }
+      ]
+     }
+    ]
+   },
+   "description": "The gateway's own ledger of what each principal has spent per period (list-price estimate, not billing). Empty until a real model call is metered; load-test replies are not metered."
+  },
+  {
+   "id": 9,
+   "type": "timeseries",
+   "title": "Cap history (each adjustment)",
+   "datasource": {
+    "type": "postgres",
+    "uid": "gateway-pg"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 13,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "postgres",
+      "uid": "gateway-pg"
+     },
+     "rawSql": "WITH ev AS (\n        SELECT a.at AS time, CASE coalesce(a.after, a.before)->'scope'->>'type' WHEN 'organization' THEN 'Everyone (default)'\n        WHEN 'user' THEN coalesce(e.email, coalesce(a.after, a.before)->'scope'->>'user_id')\n        ELSE 'Group ' || coalesce(coalesce(a.after, a.before)->'scope'->>'rbac_group_id','?') END || ' \u00b7 ' || coalesce(coalesce(a.after, a.before)->>'period','') AS metric,\n               CASE WHEN a.after IS NULL THEN 0 ELSE (a.after->>'amount')::numeric/100 END AS value\n        FROM admin_audit a LEFT JOIN principal_emails e ON e.principal = coalesce(a.after, a.before)->'scope'->>'user_id' WHERE a.action LIKE 'spend_limit.%' )\n      SELECT time, metric, value FROM ev WHERE $__timeFilter(time)\n      UNION ALL\n      SELECT now(), metric, (array_agg(value ORDER BY time DESC))[1] FROM ev GROUP BY metric\n      ORDER BY time",
+     "format": "time_series"
+    }
+   ],
+   "options": {
+    "legend": {
+     "showLegend": true,
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "drawStyle": "line",
+      "lineInterpolation": "stepAfter",
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "showPoints": "always",
+      "pointSize": 8,
+      "spanNulls": true
+     },
+     "color": {
+      "mode": "palette-classic-by-name"
+     },
+     "unit": "currencyUSD",
+     "min": 0
+    },
+    "overrides": []
+   },
+   "description": "Each dot is one adjustment; the line holds that cap until the next change and runs to now. A drop to zero is a deleted cap."
+  },
+  {
+   "id": 10,
+   "type": "timeseries",
+   "title": "Requests by user",
+   "datasource": {
+    "type": "grafana-clickhouse-datasource",
+    "uid": "clickhouse"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 13,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-clickhouse-datasource",
+      "uid": "clickhouse"
+     },
+     "rawSql": "SELECT toStartOfInterval(ts, toIntervalSecond(greatest($__interval_s, 60))) AS time,\n        if(email='','(unauthenticated)',email) AS user, count() AS requests FROM otel.v_gateway_requests WHERE $__timeFilter(ts) AND ('$data' = 'all' OR ('$data' = 'real' AND NOT is_load_test) OR ('$data' = 'loadtest' AND is_load_test)) GROUP BY time, user ORDER BY time",
+     "format": 0,
+     "editorType": "sql",
+     "queryType": "timeseries"
+    }
+   ],
+   "options": {
+    "legend": {
+     "showLegend": true,
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "drawStyle": "bars",
+      "fillOpacity": 85,
+      "lineWidth": 0,
+      "stacking": {
+       "mode": "normal",
+       "group": "A"
+      },
+      "showPoints": "never"
+     },
+     "color": {
+      "mode": "palette-classic-by-name"
+     },
+     "unit": "short",
+     "min": 0,
+     "displayName": "${__field.labels.user}"
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "alice@example.com"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#3987e5"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "bob@example.com"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#d95926"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "description": "Who is calling the gateway over time."
+  },
+  {
+   "id": 11,
+   "type": "table",
+   "title": "Budget adjustment log",
+   "datasource": {
+    "type": "postgres",
+    "uid": "gateway-pg"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 21,
+    "w": 24,
+    "h": 9
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "postgres",
+      "uid": "gateway-pg"
+     },
+     "rawSql": "SELECT a.at AS \"time\", a.actor AS \"changed by\",\n        CASE a.action WHEN 'spend_limit.upsert' THEN CASE WHEN a.before IS NULL THEN 'created' WHEN (a.after->>'amount')::numeric > (a.before->>'amount')::numeric THEN 'raised' WHEN (a.after->>'amount')::numeric < (a.before->>'amount')::numeric THEN 'lowered' ELSE 'unchanged' END\n          WHEN 'spend_limit.delete' THEN 'deleted' ELSE a.action END AS change,\n        CASE coalesce(a.after, a.before)->'scope'->>'type' WHEN 'organization' THEN 'Everyone (default)'\n        WHEN 'user' THEN coalesce(e.email, coalesce(a.after, a.before)->'scope'->>'user_id')\n        ELSE 'Group ' || coalesce(coalesce(a.after, a.before)->'scope'->>'rbac_group_id','?') END AS \"applies to\", coalesce(a.after, a.before)->>'period' AS period,\n        (a.before->>'amount')::numeric/100 AS \"from_usd\", (a.after->>'amount')::numeric/100 AS \"to_usd\",\n        coalesce(a.reason,'') AS reason\n     FROM admin_audit a LEFT JOIN principal_emails e ON e.principal = coalesce(a.after, a.before)->'scope'->>'user_id' WHERE $__timeFilter(a.at) ORDER BY a.at DESC LIMIT 200",
+     "format": "table"
+    }
+   ],
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "cellOptions": {
+       "type": "auto"
+      }
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "from_usd"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "currencyUSD"
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "to_usd"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "currencyUSD"
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "change"
+      },
+      "properties": [
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "created": {
+            "color": "#3987e5",
+            "index": 0
+           },
+           "raised": {
+            "color": "#0ca30c",
+            "index": 1
+           },
+           "lowered": {
+            "color": "#fab219",
+            "index": 2
+           },
+           "deleted": {
+            "color": "#d03b3b",
+            "index": 3
+           }
+          }
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "description": "Every change to a spend limit, who made it and the before/after amounts. From the gateway's admin_audit table; it cannot be edited through the API."
+  },
+  {
+   "id": 12,
+   "type": "table",
+   "title": "Usage by user",
+   "datasource": {
+    "type": "grafana-clickhouse-datasource",
+    "uid": "clickhouse"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 30,
+    "w": 24,
+    "h": 5
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-clickhouse-datasource",
+      "uid": "clickhouse"
+     },
+     "rawSql": "SELECT if(email='','(unauthenticated)',email) AS \"user\", count() AS requests, countIf(outcome='ok') AS ok,\n        countIf(outcome!='ok') AS failed, arrayStringConcat(arrayFilter(m -> m != '', groupUniqArray(model)), ', ') AS models, max(ts) AS \"last seen\"\n      FROM otel.v_gateway_requests WHERE $__timeFilter(ts) AND ('$data' = 'all' OR ('$data' = 'real' AND NOT is_load_test) OR ('$data' = 'loadtest' AND is_load_test)) GROUP BY email ORDER BY requests DESC",
+     "format": 1,
+     "editorType": "sql",
+     "queryType": "table"
+    }
+   ],
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto"
+     }
+    },
+    "overrides": []
+   },
+   "description": "Who is using the gateway in the selected range."
+  },
+  {
+   "id": 13,
+   "type": "table",
+   "title": "Request tracker",
+   "datasource": {
+    "type": "grafana-clickhouse-datasource",
+    "uid": "clickhouse"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 35,
+    "w": 24,
+    "h": 11
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-clickhouse-datasource",
+      "uid": "clickhouse"
+     },
+     "rawSql": "SELECT r.ts AS time, r.request_id AS request_id, if(r.email='','(unauthenticated)',r.email) AS user, if(r.model='','(none)',r.model) AS model,\n        multiIf(r.outcome='ok','OK',r.outcome='rejected','Rejected by gateway',r.outcome='spend_cap','Spend cap','Upstream error') AS outcome, r.status AS status, r.latency_ms AS ms, u.cause AS cause\n      FROM otel.v_gateway_requests r LEFT JOIN otel.v_upstream_errors u ON u.request_id = r.request_id\n      WHERE $__timeFilter(r.ts) AND ('$data'='all' OR ('$data'='real' AND NOT r.is_load_test) OR ('$data'='loadtest' AND r.is_load_test))\n        AND ('$request_id' = '' OR r.request_id = '$request_id') ORDER BY r.ts DESC LIMIT 200",
+     "format": 1,
+     "editorType": "sql",
+     "queryType": "table"
+    }
+   ],
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "cellOptions": {
+       "type": "auto"
+      },
+      "inspect": true
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "outcome"
+      },
+      "properties": [
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "OK": {
+            "color": "#0ca30c",
+            "index": 0
+           }
+          }
+         },
+         {
+          "type": "value",
+          "options": {
+           "Rejected by gateway": {
+            "color": "#fab219",
+            "index": 1
+           }
+          }
+         },
+         {
+          "type": "value",
+          "options": {
+           "Spend cap": {
+            "color": "#ec835a",
+            "index": 2
+           }
+          }
+         },
+         {
+          "type": "value",
+          "options": {
+           "Upstream error": {
+            "color": "#d03b3b",
+            "index": 3
+           }
+          }
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "request_id"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 300
+       }
+      ]
+     }
+    ]
+   },
+   "description": "Newest requests with the provider's failure cause. Paste a request_id into the variable above to isolate one call."
+  }
+ ]
+}

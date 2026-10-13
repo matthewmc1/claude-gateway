@@ -1,0 +1,30 @@
+apiVersion: 1
+
+datasources:
+  # Usage, requests, traces: everything the clients emit via the gateway.
+  - name: ClickHouse
+    uid: clickhouse
+    type: grafana-clickhouse-datasource
+    isDefault: true
+    jsonData:
+      host: clickhouse
+      port: 9000
+      protocol: native
+      secure: false
+      username: otel
+      defaultDatabase: otel
+    secureJsonData:
+      password: ${CLICKHOUSE_PASSWORD}
+
+  # Gateway-side ledger: spend per principal, admin audit, last-seen identity.
+  - name: Gateway Postgres
+    uid: gateway-pg
+    type: postgres
+    url: postgres:5432
+    user: gw
+    jsonData:
+      database: gateway
+      sslmode: disable
+      postgresVersion: 1600
+    secureJsonData:
+      password: ${POSTGRES_PASSWORD}

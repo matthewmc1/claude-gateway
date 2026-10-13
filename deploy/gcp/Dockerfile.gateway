@@ -1,0 +1,7 @@
+# Runtime image for `claude gateway`. Build context: deploy/gcp (needs build/claude-linux-x64,
+# the pinned, signature-checked Linux binary fetched by 02-build-push.sh).
+FROM gcr.io/distroless/cc-debian12:nonroot
+COPY --chmod=0755 build/claude-linux-x64 /usr/local/bin/claude
+ENV CLAUDE_CONFIG_DIR=/tmp/.claude
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/claude", "gateway", "--config", "/etc/claude/gateway.yaml"]

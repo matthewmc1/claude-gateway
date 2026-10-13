@@ -1,0 +1,20 @@
+# secrets and local state
+.env
+logs/
+.claude-test/
+.gateway.loadtest.yaml
+*.pem
+.playwright-mcp/
+
+# Terraform: keep the lock file, never the state or real variable values
+terraform/.terraform/
+*.tfstate
+*.tfstate.*
+terraform/terraform.tfvars
+terraform/*.auto.tfvars
+
+# build outputs
+app/dist/
+app/node_modules/
+app/.expo/
+deploy/gcp/build/

@@ -1,0 +1,71 @@
+# Claude apps gateway, local dev config. Run with scripts/run-gateway.sh.
+# Reference: https://code.claude.com/docs/en/claude-apps-gateway-config
+#
+# ${VAR} values come from .env (loaded by run-gateway.sh).
+
+listen:
+  host: 127.0.0.1                 # loopback; http is accepted by Claude Code only for loopback hosts
+  port: 8791
+  public_url: http://localhost:8791
+
+oidc:
+  issuer: http://localhost:5556/dex
+  client_id: claude-gateway
+  client_secret: ${OIDC_CLIENT_SECRET}
+  allowed_email_domains: [example.com]
+  scopes: [openid, profile, email, offline_access]
+
+session:
+  jwt_secret: ${GATEWAY_JWT_SECRET}
+  ttl_hours: 1                    # also bounds how long a deprovisioned user keeps access
+
+store:
+  postgres_url: ${GATEWAY_POSTGRES_URL}
+
+# Vertex AI (Google Cloud Agent Platform). `auth: {}` = Application Default
+# Credentials: your `gcloud auth application-default login` locally, the Cloud
+# Run service account in production. No key files.
+upstreams:
+  - provider: vertex
+    region: ${VERTEX_REGION}
+    project_id: ${VERTEX_PROJECT_ID}
+    auth: {}
+
+# Built-in catalog maps Claude model IDs to each upstream's naming.
+auto_include_builtin_models: true
+
+# Spend limits + admin API. Caps are set via the API (scripts/set-limit.sh),
+# not in this file. Enforcement is live on every /v1/messages request.
+admin:
+  write_keys:
+    - { id: local-admin, key: "${GATEWAY_ADMIN_WRITE_KEY}" }
+  read_keys:
+    - { id: reporting, key: "${GATEWAY_ADMIN_READ_KEY}" }
+  blocked_message: "Spend cap reached. Ask the platform team for an increase."
+
+managed:
+  policies:
+    - match: {}
+      code:
+        enforceAvailableModels: true
+        availableModels: [claude-sonnet-5-5, claude-opus-5-5, claude-haiku-5-5]   # first entry is the Default (Sonnet 5.5)
+        # Telemetry content flags. Everything stays redacted by default; enabling
+        # prompt/response capture is a privacy decision for the team to make
+        # explicitly, so it is NOT turned on here.
+        env:
+          CLAUDE_CODE_ENHANCED_TELEMETRY_BETA: "1"   # trace spans (interaction > llm_request > tool)
+          OTEL_LOG_TOOL_DETAILS: "0"
+          OTEL_LOG_USER_PROMPTS: "0"
+
+# Relay everything the clients emit to the collector -> ClickHouse.
+# Logs and traces carry per-request detail (request_id, prompt.id, latency,
+# tokens, tool calls), which is what makes per-request tracing possible.
+telemetry:
+  forward_to:
+    - url: http://localhost:4318   # loopback needs CLAUDE_GATEWAY_ALLOW_LOOPBACK=1 (set by run-gateway.sh)
+      metrics: true
+      logs: true
+      traces: true
+  resource_attributes:
+    service.namespace: claude
+    deployment.environment.name: local

@@ -1,0 +1,1363 @@
+{
+ "uid": "gw-overview",
+ "title": "Claude gateway: overview",
+ "tags": [
+  "claude",
+  "gateway"
+ ],
+ "timezone": "browser",
+ "schemaVersion": 39,
+ "version": 1,
+ "editable": true,
+ "graphTooltip": 1,
+ "refresh": "30s",
+ "time": {
+  "from": "now-6h",
+  "to": "now"
+ },
+ "templating": {
+  "list": [
+   {
+    "name": "data",
+    "label": "Data",
+    "type": "custom",
+    "query": "all,real,loadtest",
+    "current": {
+     "text": "all",
+     "value": "all"
+    },
+    "options": [
+     {
+      "text": "all",
+      "value": "all",
+      "selected": true
+     },
+     {
+      "text": "real",
+      "value": "real",
+      "selected": false
+     },
+     {
+      "text": "loadtest",
+      "value": "loadtest",
+      "selected": false
+     }
+    ],
+    "description": "real = calls that went to the model provider. loadtest = canned replies from load_test_mode."
+   }
+  ]
+ },
+ "panels": [
+  {
+   "id": 1,
+   "type": "stat",
+   "title": "Requests",
+   "datasource": {
+    "type": "grafana-clickhouse-datasource",
+    "uid": "clickhouse"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 4,
+    "h": 4
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-clickhouse-datasource",
+      "uid": "clickhouse"
+     },
+     "rawSql": "SELECT count() FROM otel.v_gateway_requests WHERE $__timeFilter(ts) AND ('$data' = 'all' OR ('$data' = 'real' AND NOT is_load_test) OR ('$data' = 'loadtest' AND is_load_test))",
+     "format": 1,
+     "editorType": "sql",
+     "queryType": "table"
+    }
+   ],
+   "options": {
+    "colorMode": "none",
+    "graphMode": "none",
+    "textMode": "value",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "values": false
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "#3987e5"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#3987e5",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "description": "All calls that reached /v1/messages, from the gateway audit log."
+  },
+  {
+   "id": 2,
+   "type": "stat",
+   "title": "Success rate",
+   "datasource": {
+    "type": "grafana-clickhouse-datasource",
+    "uid": "clickhouse"
+   },
+   "gridPos": {
+    "x": 4,
+    "y": 0,
+    "w": 4,
+    "h": 4
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-clickhouse-datasource",
+      "uid": "clickhouse"
+     },
+     "rawSql": "SELECT round(100*countIf(outcome='ok')/greatest(count(),1),1) FROM otel.v_gateway_requests WHERE $__timeFilter(ts) AND ('$data' = 'all' OR ('$data' = 'real' AND NOT is_load_test) OR ('$data' = 'loadtest' AND is_load_test))",
+     "format": 1,
+     "editorType": "sql",
+     "queryType": "table"
+    }
+   ],
+   "options": {
+    "colorMode": "none",
+    "graphMode": "none",
+    "textMode": "value",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "values": false
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "#0ca30c"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#0ca30c",
+        "value": null
+       }
+      ]
+     },
+     "unit": "percent",
+     "decimals": 1
+    },
+    "overrides": []
+   },
+   "description": "Share of requests that returned < 400. Includes rejections and upstream errors in the denominator."
+  },
+  {
+   "id": 3,
+   "type": "stat",
+   "title": "p95 latency (OK)",
+   "datasource": {
+    "type": "grafana-clickhouse-datasource",
+    "uid": "clickhouse"
+   },
+   "gridPos": {
+    "x": 8,
+    "y": 0,
+    "w": 4,
+    "h": 4
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-clickhouse-datasource",
+      "uid": "clickhouse"
+     },
+     "rawSql": "SELECT round(quantileIf(0.95)(latency_ms, outcome='ok')) FROM otel.v_gateway_requests WHERE $__timeFilter(ts) AND ('$data' = 'all' OR ('$data' = 'real' AND NOT is_load_test) OR ('$data' = 'loadtest' AND is_load_test))",
+     "format": 1,
+     "editorType": "sql",
+     "queryType": "table"
+    }
+   ],
+   "options": {
+    "colorMode": "none",
+    "graphMode": "none",
+    "textMode": "value",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "values": false
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "#3987e5"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#3987e5",
+        "value": null
+       }
+      ]
+     },
+     "unit": "ms"
+    },
+    "overrides": []
+   },
+   "description": "Gateway-measured time for successful requests. Load-test replies skip the model, so they read near zero."
+  },
+  {
+   "id": 4,
+   "type": "stat",
+   "title": "Active users",
+   "datasource": {
+    "type": "grafana-clickhouse-datasource",
+    "uid": "clickhouse"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 0,
+    "w": 4,
+    "h": 4
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-clickhouse-datasource",
+      "uid": "clickhouse"
+     },
+     "rawSql": "SELECT uniqExact(email) FROM otel.v_gateway_requests WHERE $__timeFilter(ts) AND ('$data' = 'all' OR ('$data' = 'real' AND NOT is_load_test) OR ('$data' = 'loadtest' AND is_load_test)) AND email != ''",
+     "format": 1,
+     "editorType": "sql",
+     "queryType": "table"
+    }
+   ],
+   "options": {
+    "colorMode": "none",
+    "graphMode": "none",
+    "textMode": "value",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "values": false
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "#3987e5"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#3987e5",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   }
+  },
+  {
+   "id": 5,
+   "type": "stat",
+   "title": "Upstream errors",
+   "datasource": {
+    "type": "grafana-clickhouse-datasource",
+    "uid": "clickhouse"
+   },
+   "gridPos": {
+    "x": 16,
+    "y": 0,
+    "w": 4,
+    "h": 4
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-clickhouse-datasource",
+      "uid": "clickhouse"
+     },
+     "rawSql": "SELECT countIf(outcome='upstream_error') FROM otel.v_gateway_requests WHERE $__timeFilter(ts) AND ('$data' = 'all' OR ('$data' = 'real' AND NOT is_load_test) OR ('$data' = 'loadtest' AND is_load_test))",
+     "format": 1,
+     "editorType": "sql",
+     "queryType": "table"
+    }
+   ],
+   "options": {
+    "colorMode": "none",
+    "graphMode": "none",
+    "textMode": "value",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "values": false
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "#d03b3b"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#d03b3b",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "description": "Model-provider failures (quota, permission, not found, 5xx)."
+  },
+  {
+   "id": 6,
+   "type": "stat",
+   "title": "Spend this month",
+   "datasource": {
+    "type": "postgres",
+    "uid": "gateway-pg"
+   },
+   "gridPos": {
+    "x": 20,
+    "y": 0,
+    "w": 4,
+    "h": 4
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "postgres",
+      "uid": "gateway-pg"
+     },
+     "rawSql": "SELECT coalesce(sum(cents),0)/100 FROM spend WHERE period = to_char(now() at time zone 'utc','YYYY-MM')",
+     "format": "table"
+    }
+   ],
+   "options": {
+    "colorMode": "none",
+    "graphMode": "none",
+    "textMode": "value",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "values": false
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "#3987e5"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "#3987e5",
+        "value": null
+       }
+      ]
+     },
+     "unit": "currencyUSD"
+    },
+    "overrides": []
+   },
+   "description": "From the gateway ledger (list-price estimate, a guardrail not an invoice). Reads $0 until real model calls are metered; load-test replies are not billed."
+  },
+  {
+   "id": 7,
+   "type": "timeseries",
+   "title": "Requests over time by outcome",
+   "datasource": {
+    "type": "grafana-clickhouse-datasource",
+    "uid": "clickhouse"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 4,
+    "w": 16,
+    "h": 9
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-clickhouse-datasource",
+      "uid": "clickhouse"
+     },
+     "rawSql": "SELECT toStartOfInterval(ts, toIntervalSecond(greatest($__interval_s, 60))) AS time, multiIf(outcome='ok','OK',outcome='rejected','Rejected by gateway',outcome='spend_cap','Spend cap','Upstream error') AS outcome, count() AS requests FROM otel.v_gateway_requests WHERE $__timeFilter(ts) AND ('$data' = 'all' OR ('$data' = 'real' AND NOT is_load_test) OR ('$data' = 'loadtest' AND is_load_test)) GROUP BY time, outcome ORDER BY time",
+     "format": 0,
+     "editorType": "sql",
+     "queryType": "timeseries"
+    }
+   ],
+   "options": {
+    "legend": {
+     "showLegend": true,
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "drawStyle": "bars",
+      "fillOpacity": 85,
+      "lineWidth": 0,
+      "barAlignment": 0,
+      "gradientMode": "none",
+      "stacking": {
+       "mode": "normal",
+       "group": "A"
+      },
+      "axisBorderShow": false,
+      "showPoints": "never",
+      "spanNulls": false
+     },
+     "color": {
+      "mode": "palette-classic-by-name"
+     },
+     "unit": "short",
+     "min": 0,
+     "displayName": "${__field.labels.outcome}"
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "OK"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#0ca30c"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Rejected by gateway"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#fab219"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Spend cap"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#ec835a"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Upstream error"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#d03b3b"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "description": "Colour = outcome (status palette). Stacked so the total is total traffic."
+  },
+  {
+   "id": 8,
+   "type": "bargauge",
+   "title": "Requests by model",
+   "datasource": {
+    "type": "grafana-clickhouse-datasource",
+    "uid": "clickhouse"
+   },
+   "gridPos": {
+    "x": 16,
+    "y": 4,
+    "w": 8,
+    "h": 9
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-clickhouse-datasource",
+      "uid": "clickhouse"
+     },
+     "rawSql": "SELECT if(model='','(none)',model) AS model, count() AS requests FROM otel.v_gateway_requests WHERE $__timeFilter(ts) AND ('$data' = 'all' OR ('$data' = 'real' AND NOT is_load_test) OR ('$data' = 'loadtest' AND is_load_test)) GROUP BY model ORDER BY requests DESC",
+     "format": 1,
+     "editorType": "sql",
+     "queryType": "table"
+    }
+   ],
+   "options": {
+    "orientation": "horizontal",
+    "displayMode": "basic",
+    "valueMode": "color",
+    "showUnfilled": true,
+    "namePlacement": "top",
+    "minVizHeight": 16,
+    "minVizWidth": 8,
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "values": false
+    },
+    "legend": {
+     "showLegend": false
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "min": 0,
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "#6b6a65"
+     },
+     "unit": "short"
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "claude-opus-4-8"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#3987e5"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "claude-sonnet-4-6"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#d95926"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "claude-haiku-4-5-20251001"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#199e70"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "claude-haiku-5-5"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#c98500"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "description": "Count per model, same colours as every other chart. (none) = rejected before a model was chosen.",
+   "transformations": [
+    {
+     "id": "rowsToFields",
+     "options": {
+      "mappings": [
+       {
+        "fieldName": "model",
+        "handlerKey": "field.name"
+       },
+       {
+        "fieldName": "requests",
+        "handlerKey": "field.value"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": 9,
+   "type": "timeseries",
+   "title": "Requests over time by model",
+   "datasource": {
+    "type": "grafana-clickhouse-datasource",
+    "uid": "clickhouse"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 13,
+    "w": 12,
+    "h": 9
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-clickhouse-datasource",
+      "uid": "clickhouse"
+     },
+     "rawSql": "SELECT toStartOfInterval(ts, toIntervalSecond(greatest($__interval_s, 60))) AS time, if(model='','(none)',model) AS model, count() AS requests FROM otel.v_gateway_requests WHERE $__timeFilter(ts) AND ('$data' = 'all' OR ('$data' = 'real' AND NOT is_load_test) OR ('$data' = 'loadtest' AND is_load_test)) GROUP BY time, model ORDER BY time",
+     "format": 0,
+     "editorType": "sql",
+     "queryType": "timeseries"
+    }
+   ],
+   "options": {
+    "legend": {
+     "showLegend": true,
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "drawStyle": "bars",
+      "fillOpacity": 85,
+      "lineWidth": 0,
+      "barAlignment": 0,
+      "gradientMode": "none",
+      "stacking": {
+       "mode": "normal",
+       "group": "A"
+      },
+      "axisBorderShow": false,
+      "showPoints": "never",
+      "spanNulls": false
+     },
+     "color": {
+      "mode": "palette-classic-by-name"
+     },
+     "unit": "short",
+     "min": 0,
+     "displayName": "${__field.labels.model}"
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "claude-opus-4-8"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#3987e5"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "claude-sonnet-4-6"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#d95926"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "claude-haiku-4-5-20251001"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#199e70"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "claude-haiku-5-5"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#c98500"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "(none)"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#6b6a65"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "description": "Each model keeps one colour on every chart."
+  },
+  {
+   "id": 10,
+   "type": "timeseries",
+   "title": "Requests over time by user",
+   "datasource": {
+    "type": "grafana-clickhouse-datasource",
+    "uid": "clickhouse"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 13,
+    "w": 12,
+    "h": 9
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-clickhouse-datasource",
+      "uid": "clickhouse"
+     },
+     "rawSql": "SELECT toStartOfInterval(ts, toIntervalSecond(greatest($__interval_s, 60))) AS time, if(email='','(unauthenticated)',email) AS user, count() AS requests FROM otel.v_gateway_requests WHERE $__timeFilter(ts) AND ('$data' = 'all' OR ('$data' = 'real' AND NOT is_load_test) OR ('$data' = 'loadtest' AND is_load_test)) GROUP BY time, user ORDER BY time",
+     "format": 0,
+     "editorType": "sql",
+     "queryType": "timeseries"
+    }
+   ],
+   "options": {
+    "legend": {
+     "showLegend": true,
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "drawStyle": "bars",
+      "fillOpacity": 85,
+      "lineWidth": 0,
+      "barAlignment": 0,
+      "gradientMode": "none",
+      "stacking": {
+       "mode": "normal",
+       "group": "A"
+      },
+      "axisBorderShow": false,
+      "showPoints": "never",
+      "spanNulls": false
+     },
+     "color": {
+      "mode": "palette-classic"
+     },
+     "unit": "short",
+     "min": 0,
+     "displayName": "${__field.labels.user}"
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "alice@example.com"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#3987e5"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "bob@example.com"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#d95926"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "description": "Known users have fixed colours; any other user gets a distinct colour from Grafana's classic palette (not stable across filters)."
+  },
+  {
+   "id": 11,
+   "type": "timeseries",
+   "title": "Latency p50 / p95 (OK requests)",
+   "datasource": {
+    "type": "grafana-clickhouse-datasource",
+    "uid": "clickhouse"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 22,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-clickhouse-datasource",
+      "uid": "clickhouse"
+     },
+     "rawSql": "SELECT toStartOfInterval(ts, toIntervalSecond(greatest($__interval_s, 60))) AS time, round(quantile(0.5)(latency_ms)) AS p50, round(quantile(0.95)(latency_ms)) AS p95 FROM otel.v_gateway_requests WHERE $__timeFilter(ts) AND ('$data' = 'all' OR ('$data' = 'real' AND NOT is_load_test) OR ('$data' = 'loadtest' AND is_load_test)) AND outcome='ok' GROUP BY time ORDER BY time",
+     "format": 0,
+     "editorType": "sql",
+     "queryType": "timeseries"
+    }
+   ],
+   "options": {
+    "legend": {
+     "showLegend": true,
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "none"
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ms",
+     "min": 0,
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "showPoints": "auto",
+      "pointSize": 6,
+      "spanNulls": true,
+      "axisBorderShow": false
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "p50"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#3987e5"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "p95"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#d95926"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "description": "One axis, one unit. Load-test replies are canned so these are not model latencies."
+  },
+  {
+   "id": 12,
+   "type": "table",
+   "title": "Usage by user and model",
+   "datasource": {
+    "type": "grafana-clickhouse-datasource",
+    "uid": "clickhouse"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 22,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-clickhouse-datasource",
+      "uid": "clickhouse"
+     },
+     "rawSql": "SELECT if(email='','(unauthenticated)',email) AS user, if(model='','(none)',model) AS model, count() AS requests,\n      round(100*countIf(outcome='ok')/count(),1) AS success_pct, if(countIf(outcome='ok')=0, NULL, round(quantileIf(0.95)(latency_ms,outcome='ok'))) AS p95_ms\n      FROM otel.v_gateway_requests WHERE $__timeFilter(ts) AND ('$data' = 'all' OR ('$data' = 'real' AND NOT is_load_test) OR ('$data' = 'loadtest' AND is_load_test)) GROUP BY user, model ORDER BY requests DESC",
+     "format": 1,
+     "editorType": "sql",
+     "queryType": "table"
+    }
+   ],
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm",
+    "footer": {
+     "show": false
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "cellOptions": {
+       "type": "auto"
+      }
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "success_pct"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "percent"
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "gauge",
+         "mode": "basic"
+        }
+       },
+       {
+        "id": "min",
+        "value": 0
+       },
+       {
+        "id": "max",
+        "value": 100
+       },
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "#3987e5"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "description": "Who is using which model, and how well it is working for them. This is the optimisation view."
+  },
+  {
+   "id": 13,
+   "type": "table",
+   "title": "Upstream errors (why requests failed)",
+   "datasource": {
+    "type": "grafana-clickhouse-datasource",
+    "uid": "clickhouse"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 30,
+    "w": 24,
+    "h": 8
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-clickhouse-datasource",
+      "uid": "clickhouse"
+     },
+     "rawSql": "SELECT r.ts AS time, r.request_id, r.email AS user, r.model, e.upstream_status AS status, e.cause, e.message\n     FROM otel.v_gateway_requests r LEFT JOIN otel.v_upstream_errors e USING request_id\n     WHERE r.outcome='upstream_error' AND $__timeFilter(r.ts) AND ('$data'='all' OR ('$data'='real' AND NOT r.is_load_test) OR ('$data'='loadtest' AND r.is_load_test))\n     ORDER BY r.ts DESC LIMIT 100",
+     "format": 1,
+     "editorType": "sql",
+     "queryType": "table"
+    }
+   ],
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm",
+    "footer": {
+     "show": false
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "cellOptions": {
+       "type": "auto"
+      },
+      "inspect": true
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "message"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 520
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "status"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 70
+       }
+      ]
+     }
+    ]
+   },
+   "description": "Joined from the gateway operational log by request_id."
+  },
+  {
+   "id": 14,
+   "type": "table",
+   "title": "Recent requests (per-request trace)",
+   "datasource": {
+    "type": "grafana-clickhouse-datasource",
+    "uid": "clickhouse"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 38,
+    "w": 24,
+    "h": 10
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-clickhouse-datasource",
+      "uid": "clickhouse"
+     },
+     "rawSql": "SELECT ts AS time, request_id, if(email='','(unauthenticated)',email) AS user, if(model='','(none)',model) AS model,\n      multiIf(outcome='ok','OK',outcome='rejected','Rejected by gateway',outcome='spend_cap','Spend cap','Upstream error') AS outcome, status, latency_ms, if(is_load_test,'yes','') AS load_test\n      FROM otel.v_gateway_requests WHERE $__timeFilter(ts) AND ('$data' = 'all' OR ('$data' = 'real' AND NOT is_load_test) OR ('$data' = 'loadtest' AND is_load_test)) ORDER BY ts DESC LIMIT 200",
+     "format": 1,
+     "editorType": "sql",
+     "queryType": "table"
+    }
+   ],
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm",
+    "footer": {
+     "show": false
+    }
+   },
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "cellOptions": {
+       "type": "auto"
+      },
+      "inspect": true
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "outcome"
+      },
+      "properties": [
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       },
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "OK": {
+            "color": "#0ca30c",
+            "index": 0
+           }
+          }
+         },
+         {
+          "type": "value",
+          "options": {
+           "Rejected by gateway": {
+            "color": "#fab219",
+            "index": 1
+           }
+          }
+         },
+         {
+          "type": "value",
+          "options": {
+           "Spend cap": {
+            "color": "#ec835a",
+            "index": 2
+           }
+          }
+         },
+         {
+          "type": "value",
+          "options": {
+           "Upstream error": {
+            "color": "#d03b3b",
+            "index": 3
+           }
+          }
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "request_id"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 300
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "status"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 70
+       }
+      ]
+     }
+    ]
+   },
+   "description": "Every request, newest first. request_id matches the id the client sees and the gateway log."
+  },
+  {
+   "id": 15,
+   "type": "table",
+   "title": "Spend by user (this month)",
+   "datasource": {
+    "type": "postgres",
+    "uid": "gateway-pg"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 48,
+    "w": 12,
+    "h": 7
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "postgres",
+      "uid": "gateway-pg"
+     },
+     "rawSql": "SELECT coalesce(e.email, s.principal) AS \"user\", round((s.cents/100)::numeric,4) AS usd\n     FROM spend s LEFT JOIN principal_emails e ON e.principal = s.principal\n     WHERE s.period = to_char(now() at time zone 'utc','YYYY-MM') ORDER BY s.cents DESC",
+     "format": "table"
+    }
+   ],
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto"
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "usd"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "currencyUSD"
+       }
+      ]
+     }
+    ]
+   },
+   "description": "Gateway ledger (Postgres). List-price estimate, not billing."
+  },
+  {
+   "id": 16,
+   "type": "table",
+   "title": "Auth rejections",
+   "datasource": {
+    "type": "grafana-clickhouse-datasource",
+    "uid": "clickhouse"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 48,
+    "w": 12,
+    "h": 7
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "grafana-clickhouse-datasource",
+      "uid": "clickhouse"
+     },
+     "rawSql": "SELECT ts AS time, reason, path, client_ip FROM otel.v_gateway_auth_denied WHERE $__timeFilter(ts) ORDER BY ts DESC LIMIT 100",
+     "format": 1,
+     "editorType": "sql",
+     "queryType": "table"
+    }
+   ],
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto"
+     }
+    },
+    "overrides": []
+   },
+   "description": "Requests refused for a missing, bad or expired token."
+  }
+ ]
+}
