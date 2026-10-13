@@ -1,0 +1,62 @@
+# Rendered by Terraform into Secret Manager (claude-gateway-config). Do not edit by hand; change variables or
+# config/models.json and apply. $${VAR} references are filled by the gateway at boot from Cloud Run secrets.
+listen:
+  host: 0.0.0.0
+  port: 8080
+  public_url: ${jsonencode(public_url)}
+  trusted_proxies: [169.254.0.0/16]
+
+oidc:
+  issuer: ${jsonencode(oidc_issuer)}
+  client_id: ${jsonencode(oidc_client_id)}
+  client_secret: $${OIDC_CLIENT_SECRET}
+  allowed_email_domains: ${jsonencode(allowed_email_domains)}
+  scopes: [openid, profile, email]
+  extra_auth_params: ${jsonencode(extra_auth_params)}
+
+session:
+  jwt_secret: $${GATEWAY_JWT_SECRET}
+  ttl_hours: 1
+
+store:
+  postgres_url: $${GATEWAY_POSTGRES_URL}
+  # Connections each gateway instance opens to Cloud SQL: max instances x this must stay under the tier's max_connections.
+  max_connections: ${store_max_connections}
+
+# Several upstreams give failover across regions or projects.
+upstreams:
+%{ for u in upstreams ~}
+  - provider: ${jsonencode(u.provider)}
+    region: ${jsonencode(u.region)}
+    project_id: ${jsonencode(u.project_id)}
+    auth: {}
+%{ endfor ~}
+
+auto_include_builtin_models: true
+
+# One write key per admin: the gateway's audit trail records "admin-key:<email>" for every cap change.
+# system:overrides is the budget app's own key for automatic actions (scheduled budget boosts ending).
+admin:
+  write_keys:
+%{ for a in admins ~}
+    - { id: ${jsonencode(a.email)}, key: ${jsonencode(a.key)} }
+%{ endfor ~}
+    - { id: "system:overrides", key: ${jsonencode(system_key)} }
+  read_keys:
+    - { id: budget-app-read, key: "$${GATEWAY_ADMIN_READ_KEY}" }
+  blocked_message: ${jsonencode(blocked_message)}
+
+# Models come from config/models.json. The first availableModels entry is the default; the pins make the
+# sonnet/opus/haiku aliases resolve to exactly these ids for every engineer.
+managed:
+  policies:
+    - match: {}
+      code:
+        enforceAvailableModels: true
+        availableModels: ${jsonencode(available_models)}
+%{ if length(env_pins) > 0 ~}
+        env:
+%{ for k, v in env_pins ~}
+          ${k}: ${jsonencode(v)}
+%{ endfor ~}
+%{ endif ~}

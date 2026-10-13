@@ -1,0 +1,40 @@
+name: Feature request
+description: Suggest an improvement or a new capability
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the situation, not only the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to see?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - api (budget app backend)
+        - app (UI)
+        - terraform
+        - client (engineer install script)
+        - deploy / local dev stack
+        - docs
+        - other
+  - type: checkboxes
+    id: fit
+    attributes:
+      label: Fit with the project
+      options:
+        - label: I read docs/ARCHITECTURE.md; this does not need a dependency in api/ or break "data is visible, changes are gated".
+        - label: I am willing to help build or test this.

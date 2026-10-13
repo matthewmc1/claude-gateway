@@ -1,0 +1,5 @@
+*
+!api/server.mjs
+!api/lib
+!config/models.json
+!app/dist

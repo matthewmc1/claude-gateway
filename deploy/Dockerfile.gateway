@@ -1,0 +1,9 @@
+# Runtime image for `claude gateway`. Build context: deploy/ (needs build/claude-<version>-linux-x64, the pinned,
+# signature-checked Linux binary that deploy/build-push.sh fetches).
+# Pinned by digest (multi-arch index of gcr.io/distroless/cc-debian12:nonroot, from `docker buildx imagetools inspect`).
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f
+ARG CLAUDE_VERSION
+COPY --chmod=0755 build/claude-${CLAUDE_VERSION}-linux-x64 /usr/local/bin/claude
+ENV CLAUDE_CONFIG_DIR=/tmp/.claude
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/claude", "gateway", "--config", "/etc/claude/gateway.yaml"]

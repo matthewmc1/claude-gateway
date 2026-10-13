@@ -1,0 +1,18 @@
+# Default filter for `docker build` from the repo root. The image Dockerfiles carry stricter allow-lists of their own
+# (deploy/Dockerfile.app.dockerignore, deploy/Dockerfile.gateway.dockerignore).
+.git
+.env
+.env.*
+logs/
+.claude-test/
+.playwright-mcp/
+*.pem
+*.tfstate
+*.tfstate.*
+terraform/.terraform/
+terraform/terraform.tfvars
+terraform/secrets.auto.tfvars
+**/node_modules
+app/.expo
+deploy/build
+data/

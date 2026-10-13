@@ -1,145 +1,188 @@
-# Claude gateway
+<p align="center">
+  <img src="assets/brand/readme-banner-1200x300.png" alt="Gateway Budgets: one gateway for Claude Code, attributed, capped, visible" width="100%">
+</p>
 
-Give an engineering team Claude Code through **one company gateway**: everyone signs in with their work account,
-every request is attributed and capped, and admins see and adjust budgets in a purpose-built app.
+<p align="center">
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-3987e5"></a>
+  <a href="https://github.com/matthewmc1/claude-gateway/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/matthewmc1/claude-gateway/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="Zero npm dependencies in the backend" src="https://img.shields.io/badge/backend%20deps-0-3987e5">
+  <img alt="Self-hosted on Google Cloud" src="https://img.shields.io/badge/self--hosted-Google%20Cloud-3987e5">
+</p>
 
+# Gateway Budgets
+
+**Give your engineers Claude Code through one company gateway, with every request attributed, every person capped, and everything visible.**
+
+Engineers sign in with their work account. Admins see who is using what, set weekly and monthly budgets per person, and grant
+temporary on-call boosts that undo themselves. Platform and finance get an audit trail and alerts. Everything runs in *your*
+Google Cloud project; nothing leaves it.
+
+> Independent open-source project. Not affiliated with, endorsed by, or sponsored by Anthropic. It builds on Anthropic's own
+> [Claude apps gateway](https://code.claude.com/docs/en/claude-apps-gateway), which ships inside the `claude` binary, and adds the
+> budget app, Terraform, installer and monitoring around it.
+
+<p align="center">
+  <img src="docs/screenshots/people.png" alt="People: every person's spend against their budget, with usage sparklines" width="100%">
+  <br><sub>People: everyone's budget at a glance. Screenshots use built-in sample data (<code>scripts/demo.sh</code>).</sub>
+</p>
+
+## Why use it
+
+### For engineers
+
+| You get | How |
+|---|---|
+| **No keys on your laptop** | Sign in once with your work account (OIDC). No API keys, no cloud credentials. |
+| **One command to set up** | `claude-gateway-setup.sh install`. Your admin has already baked in the gateway address and sensible defaults. |
+| **A good default, an honest step up** | Sonnet 5.5 at medium effort out of the box. Moving up to Opus 5.5 is one explicit command, and the app tells you it spends budget faster. |
+| **See your own spend** | *My usage*: weekly and monthly budget rings, what is left, and your pace. |
+| **Know why a request failed** | Your last 10 requests with the real cause (quota, permission, budget cap), not a vague error. |
+| **Practical tips from real data** | Model mix, error rate and budget pace turned into plain advice with a copyable command. |
+
+### For admins
+
+| You get | How |
+|---|---|
+| **Everyone's usage in one place** | People, models, outcomes, latency. Data is visible without a login; changes need an admin. |
+| **Budgets that bite** | Weekly and monthly caps per person, company defaults, "unlimited" exceptions. Enforced by the gateway on every request. |
+| **On-call boosts that undo themselves** | Give someone +$75 for the incident week with a reason. The cap goes back on its own, and if someone edits it meanwhile, your boost steps aside instead of overwriting. |
+| **Accountability** | Each admin has their own account and gateway key, so the audit trail says *who* changed *which* cap, not "an admin". |
+| **Alerts, not surprises** | Email alerts for provider error bursts, spend-cap blocks, sign-in problems, gateway or database trouble. |
+| **Add models without a redeploy dance** | One file, `config/models.json`. The gateway policy, every engineer's model aliases and the app all follow. |
+
+### For platform, security and finance
+
+* **Private by default.** Cloud Run services require Google IAM; no public endpoints; the database has no public IP.
+* **Only your people sign in.** OIDC against your Google (or Okta/Entra) accounts, restricted to your email domains.
+* **Everything is code.** Terraform provisions it (one wizard, one file of settings); the engineer installer is a script you can read.
+* **You can audit it.** Zero runtime dependencies in the backend; the whole thing is MIT-licensed and small enough to read in an afternoon.
+
+## See it
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/my-usage.png" alt="My usage and cost coach"><br><b>My usage &amp; coach.</b> Budget rings, tips from real signals, last 10 requests.</td>
+<td width="50%"><img src="docs/screenshots/person-boost.png" alt="Person drawer with a live on-call boost"><br><b>Temporary boost.</b> +$75 for the incident week, reverting automatically, with a reason on record.</td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/screenshots/company.png" alt="Company defaults and exposure"><br><b>Company.</b> Per-person defaults, exposure if everyone hit their cap, live boosts.</td>
+<td width="50%"><img src="docs/screenshots/models.png" alt="Models and how to add one"><br><b>Models.</b> The catalog people can use, who uses it, and how to add one.</td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/screenshots/activity.png" alt="Activity: every cap change and boost"><br><b>Activity.</b> Every cap change and boost, by whom, when.</td>
+<td width="50%"><img src="docs/screenshots/my-usage-light.png" alt="My usage in light mode"><br><b>Light and dark</b>, desktop and phone width.</td>
+</tr>
+</table>
+
+## How it works
+
+```mermaid
+flowchart LR
+  E["Engineer<br/>Claude Code"] -- "work account (OIDC)" --> G["Gateway<br/>caps, model policy, audit"]
+  G -- "service account, no keys" --> V["Claude on Vertex AI"]
+  G --- DB[("Cloud SQL<br/>spend ledger")]
+  G -. "structured logs" .-> L["Cloud Logging"]
+  A["Budget app<br/>admins + engineers"] -- "admin API (per-admin key)" --> G
+  L -- "usage ingest" --> A
+  S["Cloud Scheduler<br/>every minute"] -- "tick: apply and revert boosts" --> A
+  M["Monitoring<br/>alerts to email"] -.-> L
 ```
- engineer ──Claude Code──▶ gateway (OIDC sign-in, model policy, caps) ──▶ Claude on Vertex AI
-                                │                                   
-                admins ──▶ budget app (per-person weekly / monthly budgets, company defaults, change history)
-```
 
-* **Engineers:** `client/claude-gateway-setup.sh install` → Sonnet 5.5 at medium effort by default, one explicit command
-  to step up to Opus 5.5, sign-in only through the company identity provider. See [`client/`](client/).
-* **Admins:** defined in Terraform, sign in with their own account; every budget change is attributed to a person in
-  the gateway's audit trail. See [`terraform/`](terraform/).
-* **Platform:** Terraform provisions private Cloud Run services, Cloud SQL, Secret Manager and Vertex access.
+## Quick start
 
-## Quick start (Google Cloud)
+**1. Try it in a minute: no cloud, no gateway, no credentials.**
 
 ```bash
-cd terraform && cp terraform.tfvars.example terraform.tfvars   # set project, admin_users, allowed_email_domains
-terraform init && terraform apply -target=google_artifact_registry_repository.images -target=google_project_service.apis
-../deploy/gcp/02-build-push.sh && terraform apply
-../deploy/gcp/05-proxy.sh                                      # gateway :8891, budget app :8892
-./client/claude-gateway-setup.sh install --gateway-url http://localhost:8891
+git clone https://github.com/matthewmc1/claude-gateway && cd claude-gateway
+./scripts/demo.sh           # http://localhost:8792  ·  admin sign-in: admin@example.com / demo-admin
 ```
 
-Full steps and caveats in [`terraform/README.md`](terraform/README.md).
+**2. Deploy to your Google Cloud project.**
+
+```bash
+cd terraform
+./setup.sh --create-state-bucket   # wizard: project, admins, email domain, profile (trial|production), Google sign-in, private state bucket
+terraform init
+terraform apply -target=google_artifact_registry_repository.images -target=google_project_service.apis
+../deploy/build-push.sh            # verifies and builds the gateway and app images, prints the app image tag
+terraform apply -var app_image_tag=<that tag>   # everything else (the database takes 10-15 minutes)
+```
+
+Terraform cannot create Google's sign-in (OAuth) client for you; `setup.sh` and `terraform output oidc_setup_steps`
+give the exact console steps and redirect URI. Details, costs and teardown: [docs/DEPLOY.md](docs/DEPLOY.md).
+
+**3. Roll out to engineers.**
+
+```bash
+scripts/package-client.sh --gateway-url https://your-gateway   # one self-contained installer, gateway address baked in
+# engineers then run, with no arguments:
+./claude-gateway-setup.sh install
+claude        # /login -> "Cloud gateway" -> sign in with the work account
+```
+
+## The flows, end to end
+
+| Flow | What happens | Where |
+|---|---|---|
+| **Admin setup** | Define admins and defaults once; Terraform creates private services, a database, secrets, alerts, a scheduler | [`terraform/`](terraform/) |
+| **Engineer onboarding** | One installer sets the gateway, locks sign-in to it, blocks direct Anthropic/Vertex/API-key use, sets Sonnet 5.5 and medium effort | [`client/`](client/) |
+| **Daily use** | Requests flow through the gateway; each is attributed to a person, checked against their caps, logged | gateway |
+| **Tracking** | Usage is rolled up hourly from the gateway's own logs: per person, model and outcome, latency | `api/lib/usage` |
+| **Budget changes** | Admin signs in only when changing something; every change is attributed to them in the gateway audit trail | People, Company |
+| **On-call boost** | Reason + window + extra amount; applied automatically at the start, restored at the end, steps aside if edited by hand | `api/lib/overrides.mjs` |
+| **Monitoring** | Log-based metrics and alert policies email the admins; a dashboard covers rate, errors, latency, database | `terraform/monitoring.tf` |
+| **Improving over time** | Coach tips from model mix, errors and pace today; token and prompt-cache coaching once client telemetry is collected (not yet) | My usage |
+| **Extending** | Edit `config/models.json` to add a model; add a Vertex region or project as another upstream | [docs/DEPLOY.md](docs/DEPLOY.md) |
+
+## By the numbers
+
+All measured from this repository, not estimated.
+
+| | |
+|---|---|
+| Automated checks that run without Docker | **1,233** (228 backend · 75 UI · 527 installer · 306 Terraform · 97 deploy) |
+| End-to-end tests against the real gateway binary | **85** (need Docker for a throwaway database: `scripts/e2e.sh`) |
+| Backend runtime dependencies | **0** (Node built-ins only) |
+| Product code | 2,828 lines backend · 2,993 UI · 1,254 installer · 2,744 Terraform · 393 deploy |
+| Time from clone to a running demo | **under a minute** after the first web build (server cold start 0.17 s) |
+| Demo data | 10 people, 11,550 requests over 30 days, answered in about 5 ms per page |
+| Engineer setup | **1 command**, no arguments, once the admin has packaged the installer |
+| Infrastructure | private Cloud Run x2, Cloud SQL, 8 secrets, 20 alert policies, 17 log metrics, 1 dashboard |
+| Money saved | not claimed: this is a visibility and control tool, and your savings depend on your usage |
+
+## Security model in brief
+
+* The app **only listens on loopback** locally and refuses to start otherwise. On Cloud Run it is private behind Google IAM.
+* Data is **readable without a login by default** (that is the point: visibility). Set `APP_VIEW_ACCESS=admin` (Terraform: `view_access`) to require sign-in for reads too.
+* **Every write needs an admin**, uses that admin's own gateway key, and is rate-limited and logged.
+* Admin keys and passwords are server-side only and never sent to a browser. Terraform state holds them: use a private remote backend.
+
+Read [SECURITY.md](SECURITY.md) for the full threat model and how to report a problem.
+
+## Honest limits
+
+* **Spend is the gateway's list-price estimate**, a guardrail, not an invoice. Reconcile against your cloud bill.
+* **No token or prompt-cache analytics yet.** The gateway's own events carry no token counts; that needs client telemetry, which is not collected. The coach says so instead of guessing.
+* **The current Terraform has been validated and planned offline (225 checks) but not applied end to end** in an automated test: Cloud Run starting with the new sizing and probes, Cloud Scheduler's token being accepted, and the alert filters firing on real traffic are verified only by reading and by tests against the real gateway binary's log shapes. Do a `trial`-profile apply first.
+* **No real Claude reply has been observed through the Vertex path in this repository's tests**: the end-to-end suite uses a fake Vertex upstream for replies. Check Model Garden access and quota (`global_online_prediction_requests_per_base_model`) before rollout.
+* **Real sign-in end to end** (Claude Code through your identity provider) depends on your IdP and has not been exercised by this repository's automated tests.
+* **The Windows installer is untested** (no PowerShell in the build environment). macOS and Linux are tested.
+* **Weekly budget periods** follow the gateway's own boundaries, which are not documented; the app shows what the gateway reports.
 
 ## Repository map
 
 | Path | What |
 |---|---|
-| `terraform/` | Provisioning, including admin users |
-| `client/` | Engineer install, model and effort commands |
-| `api/`, `app/` | Budget app (Node backend, React Native Web UI) |
-| `deploy/gcp/` | Image build and push, local authenticating proxy, shell equivalents of the Terraform |
-| `config/`, `docker-compose.yaml`, `scripts/`, `clickhouse/`, `grafana/` | Local development stack and Grafana dashboards |
+| [`terraform/`](terraform/) | Google Cloud provisioning, setup wizard, monitoring, tests |
+| [`client/`](client/) | Engineer installer (bash; PowerShell untested), packager, tests |
+| [`api/`](api/) | Backend: gateway client, usage, overrides, coach, routes (zero dependencies) |
+| [`app/`](app/) | React Native Web UI (Expo) |
+| [`deploy/`](deploy/) | Image build and push, local authenticating proxy |
+| [`config/`](config/) | `models.json` (the model catalog) and local-stack configs |
+| [`docs/`](docs/) | [Architecture and contracts](docs/ARCHITECTURE.md), [deploy guide](docs/DEPLOY.md), [local stack](docs/LOCAL-DEV.md) |
+| [`assets/brand/`](assets/brand/) | Logo and icons |
 
----
+## Contributing
 
-# Local development stack
-
-Anthropic's own [Claude apps gateway](https://code.claude.com/docs/en/claude-apps-gateway)
-(built into the `claude` binary) in front of Vertex AI, plus an analytics layer
-that stores every request and shows it in Grafana.
-
-```
- Claude Code / Desktop ──HTTPS+SSO token──▶ claude gateway ──ADC──▶ Vertex AI
-                                              │   │  │
-                          spend ledger, audit │   │  └─ audit log (JSON, per request)
-                                  Postgres ◀──┘   │            │
-                                                  └─ OTLP relay│
-                                                       ▼       ▼
-                                                   OTel collector ──▶ ClickHouse ──▶ Grafana
-```
-
-| Piece | What it gives you |
-|---|---|
-| gateway | SSO sign-in, per-group model allowlist, live spend caps (429 at cap), failover, no keys on laptops |
-| Postgres | the gateway's spend ledger, caps, admin audit, last-seen identity |
-| collector + ClickHouse | every gateway request (incl. failures) and client OTLP metrics/logs/traces, kept 180 days |
-| Budget app (`app/` + `api/`) | React Native Web app on http://localhost:8792: per-person usage, weekly and monthly budget editing, company defaults, change history. A small backend keeps the admin keys off the browser. |
-| Grafana | `Claude gateway: overview`: outcomes, models, users, latency, upstream error causes, per-request trace.<br>`Claude gateway: budgets and tracking`: caps in force, cap history, budget adjustment log (who changed what, before/after), usage by user, request tracker with request-ID lookup |
-
-## Run locally
-
-Needs Docker, the `claude` CLI (v2.1.195+), and `gcloud auth application-default login`.
-
-```bash
-./scripts/setup.sh              # writes .env with random secrets; check VERTEX_PROJECT_ID
-docker compose up -d
-./scripts/apply-views.sh        # ClickHouse views (after the collector has written once)
-./scripts/run-gateway.sh        # gateway on http://localhost:8791
-./scripts/claude-dev.sh         # isolated Claude Code that signs in via the gateway
-```
-
-Grafana: http://localhost:3000, user `admin`, password is `GRAFANA_ADMIN_PASSWORD` in `.env`.
-Dev users (Dex): `alice@example.com`, `bob@example.com`, password `changeme`.
-
-Every cap change is written to the gateway's `admin_audit` table and shows in the budgets dashboard.
-Spend caps: `./scripts/set-limit.sh org 100 monthly`, `... user <sub> 20 daily`, `... list`, `... effective`.
-
-## Budget app
-
-```bash
-./scripts/run-app.sh          # builds app/dist on first run, serves http://localhost:8792
-```
-
-Sign in with `APP_ADMIN_PASSWORD` from `.env`. People page: usage and budget per person, click one to edit their
-weekly and monthly cap (company default, custom amount, or unlimited). Company page: default per-person caps,
-exposure and usage. Activity page: audit trail of every cap change.
-
-* Caps are written through the gateway admin API, so they take effect on the next request and show in the gateway's own audit log.
-* Org and group caps are **per-person defaults**, not a shared pool. A personal cap overrides them (higher or lower).
-* The audit trail records the admin key (`local-admin`), not which person used the app. There is one shared password.
-* `DEMO_SPEND=1 ./scripts/run-app.sh` overlays fabricated spend for design review (banner shown). Never use it for decisions.
-* Rebuild after editing `app/`: `BUILD=1 ./scripts/run-app.sh`. Dev server: `cd app && npx expo start --web` (talks to :8792).
-* Daily caps are shown read-only; manage them with `scripts/set-limit.sh`.
-
-## Vertex requirements (the usual first-run failures)
-
-| Symptom in the dashboard | Cause |
-|---|---|
-| 403 `BILLING_DISABLED` | billing account closed or not linked to the project |
-| 404 publisher model not found | wrong region. Claude models are served from **`global`**, set `VERTEX_REGION=global` |
-| 429 `RESOURCE_EXHAUSTED ... per_base_model` | project has no Claude quota yet. Request it under IAM & Admin > Quotas, filter `global_online_prediction_requests_per_base_model` |
-
-The "Upstream errors" panel shows these with Google's own message, per request.
-
-## Load-test mode (no model calls)
-
-`LOAD_TEST=1 ./scripts/run-gateway.sh` runs the full gateway path with canned replies,
-on a **separate database** (`gateway_loadtest`) so fake traffic never touches real
-spend or caps. Audit events carry `load_test:true`; the dashboard's **Data** variable
-filters `real` / `loadtest` / `all`. Restart without `LOAD_TEST` for real traffic.
-Never run a gateway developers use in this mode.
-
-## Privacy
-
-Telemetry is stamped with each user's verified email and groups. Prompts, responses and
-tool details stay **redacted** (`OTEL_LOG_*` = 0 in `config/gateway.yaml`). Turning those on
-is a team decision; tell people first, and restrict who can open Grafana.
-
-## Known limits
-
-* The gateway's spend figures are list-price estimates, a guardrail rather than an invoice. Reconcile against the GCP bill.
-* Audit events carry no token counts or cost. Tokens, cost, cache hit rate and tool behaviour come from **client** OTLP (`claude_code.api_request` etc.), which needs a real Claude Code session. Views and panels for that are not built yet.
-* The spend-ledger panel is empty until a real model call is metered, so "spend vs cap" and "blocked by cap" are untested end to end. The ledger's period key format is unverified, so there is no percent-of-cap panel yet.
-* A request rejected for policy logs `model: null`, so a rejection can't be attributed to the model asked for.
-* Dex has no groups, so group-scoped caps/policies need a real IdP to exercise.
-* `config/otel-collector.yaml` creates ClickHouse tables on first write (dev). For prod set `create_schema: false` and own the DDL.
-
-## Cloud Run
-
-Gateway and budget app run as private Cloud Run services, state in Cloud SQL, secrets in Secret Manager.
-See `deploy/gcp/README.md`. Reach them with `deploy/gcp/05-proxy.sh` (gateway on localhost:8891, app on localhost:8892).
-Google sign-in for the gateway needs an OAuth client you create in the console; until then the gateway runs
-with a placeholder and sign-in can't complete. Not deployed: ClickHouse/Grafana (the app's usage views are empty there).
-
-## Not done yet
-
-Needs a decision on the real IdP (Google Workspace/Okta/Entra), a private network path
-(Claude Code only connects to private addresses), Cloud SQL, and Cloud Logging as the
-audit-log source instead of the local file. See the Google Cloud and deployment pages linked from the gateway docs.
+Issues and pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md). Run the suites listed in [CLAUDE.md](CLAUDE.md#tests) before you open a PR.
+Licensed under the [MIT License](LICENSE).

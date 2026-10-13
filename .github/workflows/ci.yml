@@ -1,0 +1,139 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Actions are pinned by full commit SHA (the comment names the release it is). The SHAs were resolved with
+# `git ls-remote --tags` on each action's repository; Dependabot (github-actions ecosystem) proposes new SHAs.
+#   actions/checkout           11d5960a326750d5838078e36cf38b85af677262   v4.4.0
+#   actions/setup-node         49933ea5288caeca8642d1e84afbd3f7d6820020   v4.4.0
+#   hashicorp/setup-terraform  b9cd54a3c349d3f38e8881555d616ced269862dd   v3.1.2
+
+jobs:
+  api:
+    # The budget-app image runs Node 22, so 22 is the version that must pass. 23 is a canary and may fail without failing CI.
+    name: api tests (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: ${{ matrix.canary }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - node: 22
+            canary: false
+          - node: 23
+            canary: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Test
+        working-directory: api
+        run: node --test test/*.test.mjs
+
+  app:
+    name: app typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: Install
+        working-directory: app
+        run: npm ci
+      - name: Typecheck
+        working-directory: app
+        run: npx tsc --noEmit
+
+  client:
+    name: client tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Test
+        run: bash client/test/run.sh
+
+  deploy:
+    name: deploy tests (release signature binding, proxy, Dockerfile pins)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Test
+        run: bash deploy/test/run.sh
+
+  terraform:
+    name: terraform fmt, validate, tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          # The version the offline tests are run with locally; the configuration needs >= 1.5.
+          terraform_version: 1.5.7
+          terraform_wrapper: false
+      - name: Format
+        run: terraform fmt -check -recursive -diff terraform
+      - name: Validate (scratch copy, no backend, no credentials)
+        run: |
+          scratch="$(mktemp -d)"
+          cp -R terraform/. "$scratch/"
+          rm -rf "$scratch/.terraform" "$scratch"/*.tfstate* "$scratch/terraform.tfvars" "$scratch/zz_imports.tf" "$scratch/backend.tf"
+          terraform -chdir="$scratch" init -backend=false -input=false
+          terraform -chdir="$scratch" validate
+      - name: Tests
+        run: bash terraform/tests/run.sh
+
+  secrets:
+    name: secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # A dependency-free scan (no third-party action to trust): credential shapes and files that must never be committed.
+      - name: Scan tracked files
+        run: bash .github/scripts/secret-scan.sh .
+
+  syntax:
+    name: shell and JS syntax
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: bash -n
+        run: |
+          status=0
+          while IFS= read -r f; do
+            bash -n "$f" || status=1
+          done < <(git ls-files '*.sh')
+          exit "$status"
+      - name: node --check
+        run: |
+          status=0
+          while IFS= read -r f; do
+            node --check "$f" || status=1
+          done < <(git ls-files 'api/*.mjs' 'api/**/*.mjs' 'deploy/*.mjs' 'deploy/**/*.mjs' 'scripts/*.mjs')
+          exit "$status"

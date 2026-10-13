@@ -1,0 +1,18 @@
+# Easiest: ./setup.sh --create-state-bucket writes backend.tf for you and (after you type yes) creates the bucket.
+#
+# Keep Terraform state in a private GCS bucket instead of a local file. The state holds generated passwords and keys.
+#
+#   1. Create the bucket once (versioned, uniform access, no public access), in a project you trust:
+#        gcloud storage buckets create gs://YOUR-PROJECT-tfstate --location=europe-west2 \
+#          --uniform-bucket-level-access --public-access-prevention
+#        gcloud storage buckets update gs://YOUR-PROJECT-tfstate --versioning
+#   2. cp backend.tf.example backend.tf   and put the bucket name below.
+#   3. terraform init -migrate-state      (answer "yes" to copy an existing local state)
+#
+# Grant roles/storage.objectUser on that bucket only to the people who run Terraform.
+terraform {
+  backend "gcs" {
+    bucket = "YOUR-PROJECT-tfstate"
+    prefix = "claude-gateway"
+  }
+}

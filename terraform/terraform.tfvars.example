@@ -1,26 +1,101 @@
-# Copy to terraform.tfvars and edit. Never commit terraform.tfvars.
-project_id = "my-gcp-project"
-region     = "europe-west2"
+# Copy to terraform.tfvars and edit (or run ./setup.sh, which asks for these and writes the file for you).
+# Never commit terraform.tfvars. Four things are REQUIRED; everything else has a sensible default.
+#
+# ============================== REQUIRED ==============================================================================
 
-# The admins, defined once at setup. Each gets a generated password (terraform output -json admin_credentials)
-# and their own gateway key, so the audit trail shows who changed a budget. Add or remove people here and apply.
+# 1. Your Google Cloud project id (not its display name). Billing must be enabled on it.
+project_id = "my-gcp-project"
+
+# 2. Admins: can sign in to the budget app and change budgets. Each gets a generated password and their own gateway key,
+#    so the audit trail shows who changed what. Read passwords with: terraform output -json admin_credentials
 admin_users = [
   { email = "platform-lead@example.com", name = "Platform Lead" },
   { email = "finance@example.com" },
 ]
 
-# Only these email domains can sign in to the gateway through your identity provider.
+# 3. Only people with an email in these domains can sign in to the gateway.
+#    (May be left out when oidc.google_workspace_domain is set below: it is the default.)
 allowed_email_domains = ["example.com"]
 
-# Sign-in with Google accounts. Create a "Web application" OAuth client whose redirect URI is <public_url>/oauth/callback.
-oidc_client_id = "123456789-abc.apps.googleusercontent.com"
-# oidc_client_secret: pass it as an environment variable instead:  export TF_VAR_oidc_client_secret=...
+# 4. Google sign-in. Google cannot create this client through Terraform or any API: create a "Web application" OAuth client
+#    in the console, then paste its id here. Not ready yet? Leave client_id out: the first apply works with a placeholder
+#    and `terraform output oidc_setup_steps` tells you exactly what to click. The SECRET goes in secrets.auto.tfvars
+#    (./setup.sh writes it, mode 600, git-ignored) or `export TF_VAR_oidc_client_secret=...`; never in this file.
+oidc = {
+  client_id = "123456789012-abcdef123456.apps.googleusercontent.com"
+  # google_workspace_domain = "example.com"            # limit Google's account chooser to your Workspace domain
+  # issuer = "https://login.example.com"               # a company IdP (Okta, Entra, ...) instead of Google
+}
 
-# What engineers' Claude Code connects to. localhost works with the local proxy; use an internal https hostname for a team.
-public_url = "http://localhost:8891"
+# 5. The profile. REQUIRED, no default: choose on purpose.
+#    "trial":      db-f1-micro, zonal, NO point-in-time recovery, NO database deletion protection, a state bucket terraform
+#                  destroy can empty and delete, 1 warm gateway instance (max 2), relaxed alerts. A first look only.
+#    "production": regional HA database with PITR and deletion protection, 2 warm instances (max 6), protected state bucket,
+#                  tighter alerts.
+profile = "production"
 
-# Models people may use. The first entry is the default.
-# allowed_models = ["claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5"]
+# ============================== COMMON OPTIONS ========================================================================
 
-# For a throwaway trial only: allow `terraform destroy` to delete the database.
-# db_deletion_protection = false
+# region     = "europe-west2"     # Cloud Run, Cloud SQL, registry, state bucket, scheduler
+
+# What Claude Code connects to; the OAuth redirect URI is <public_url>/oauth/callback. Claude Code accepts only a
+# private or localhost gateway: http://localhost:8891 works with deploy/proxy.sh; a team uses an internal https hostname.
+# public_url = "http://localhost:8891"
+
+# Who can READ usage in the budget app: "open" (anyone who can reach it) or "admin" (an admin sign-in is needed too).
+# Changing budgets always needs an admin sign-in.
+# view_access = "open"
+
+# More people or groups allowed to open the private services (they can see usage, not change budgets).
+# Only user:, group:, serviceAccount: and domain: members are accepted; allUsers / allAuthenticatedUsers are refused.
+# extra_invokers = ["group:platform@example.com"]
+
+# Alert emails (default: the admins).
+# alert_emails = ["oncall@example.com"]
+
+# ============================== MODELS AND UPSTREAMS ==================================================================
+# Models are NOT set here: edit ../config/models.json and apply. It drives the gateway policy, the
+# sonnet/opus/haiku aliases pinned for every engineer, and the budget app.
+
+# Failover: add another Vertex region or project. A missing region/project falls back to vertex_region / project_id.
+# upstreams = [
+#   { region = "global" },
+#   { region = "us-east5" },
+#   { region = "global", project_id = "my-other-project" },   # also grants the gateway aiplatform.user there
+# ]
+# upstream_project_iam = true     # set false to manage that grant yourself
+
+# ============================== SIZING (override the profile) =========================================================
+# db_tier                = "db-f1-micro"
+# db_deletion_protection = false    # trial default; true for production
+# gateway_min_instances  = 1
+# gateway_max_instances  = 2        # trial 2, production 6. max x gateway_store_max_connections (5) must fit the tier's max_connections
+# gateway_vertex_role    = "roles/aiplatform.user"   # or a least-privilege custom role, see docs/DEPLOY.md
+# db_maintenance_window  = { day = 7, hour = 3 }      # UTC, Sunday 03:00
+# state_bucket_force_destroy = true # lets terraform destroy delete the app-state bucket even if it holds objects
+
+# ============================== LOGS AND ALERTS =======================================================================
+# Extend retention of the project's _Default log bucket (PROJECT-WIDE; leave off in a shared project). The budget app's
+# usage views are built from the gateway's logs, so retention bounds how far back they reach.
+# manage_log_retention = false
+# log_retention_days   = 400
+
+# enable_monitoring = true          # log-based metrics, alert policies, email channels, dashboard
+# alert_thresholds = {              # override any profile threshold
+#   upstream_errors = 20            # per 5 minutes
+#   sql_connections = 40            # about 80% of your tier's max_connections
+# }
+
+# ============================== IMAGES (set after deploy/build-push.sh) ===============================================
+# gateway_image_tag = "2.1.296"                  # the pinned Claude Code release
+app_image_tag = "20260101120000"                 # REQUIRED for a full apply: the tag build-push.sh prints (8+ digit timestamp, 7-40 hex git sha, or semver-with-build-suffix; never latest/main/dev)
+
+# ============================== OPTIONAL: CREATE THE PROJECT TOO ======================================================
+# Normally you bring an existing project. To have Terraform create it (needs billing_account and ONE of org_id/folder_id):
+# create_project  = true
+# billing_account = "0123AB-4567CD-89EF01"
+# org_id          = "123456789012"
+
+# ============================== ENGINEER INSTALL ======================================================================
+# client_default_effort = "medium"   # low | medium | high | xhigh
+# write_client_defaults = false      # also write ../client/defaults.json for the installer

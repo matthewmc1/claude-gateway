@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { useColorScheme } from 'react-native';
 import { readStore, writeStore } from './store';
+import { budgetState as logicState, Tone } from './logic/budget';
+import { themeFromSearch } from './logic/nav';
 
 // Tokens come from the validated dataviz palette (categorical + status), stepped per mode.
 const common = { good: '#0ca30c', warn: '#fab219', serious: '#ec835a', crit: '#d03b3b' };
@@ -25,8 +27,10 @@ export const useTheme = () => useContext(Ctx);
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const system = useColorScheme();
+  // ?theme=light|dark forces a theme (for screenshots) without touching the saved preference.
+  const forced = useMemo(() => (typeof location !== 'undefined' ? themeFromSearch(location.search) : null), []);
   const [override, setOverride] = useState<'dark' | 'light' | null>(() => readStore('theme') as any);
-  const mode = override ?? (system === 'light' ? 'light' : 'dark');
+  const mode = forced ?? override ?? (system === 'light' ? 'light' : 'dark');
   const value = useMemo(() => ({
     t: mode === 'dark' ? dark : light,
     toggle: () => { const next = mode === 'dark' ? 'light' : 'dark'; setOverride(next); writeStore('theme', next); },
@@ -35,6 +39,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     if (typeof document !== 'undefined') {
       document.documentElement.style.background = value.t.bg;
       document.documentElement.style.colorScheme = mode;
+      // A visible keyboard focus ring everywhere (react-native-web removes the browser default on some elements).
+      let st = document.getElementById('gwb-focus') as HTMLStyleElement | null;
+      if (!st) { st = document.createElement('style'); st.id = 'gwb-focus'; document.head.appendChild(st); }
+      st.textContent = `[tabindex]:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid ${value.t.accent} !important; outline-offset: 2px; border-radius: 8px; }`;
     }
   }, [value, mode]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
@@ -57,14 +65,9 @@ export function modelColor(t: Theme, model: string) {
 export function userColor(t: Theme, index: number) { return t.series[index % t.series.length]; }
 
 // Budget state: always paired with a text label so colour is never the only signal.
-export type BudgetState = { key: 'nocap' | 'ok' | 'watch' | 'near' | 'over' | 'unlimited'; label: string; color: string; pct: number };
+export const toneColor = (t: Theme, tone: Tone): string => (tone === 'muted' ? t.muted : t[tone]);
+export type BudgetState = { key: ReturnType<typeof logicState>['key']; label: string; color: string; pct: number };
 export function budgetState(t: Theme, spendCents: number, capCents: number | null, unlimited = false): BudgetState {
-  if (unlimited) return { key: 'unlimited', label: 'Unlimited', color: t.accent, pct: 0 };
-  if (capCents === null) return { key: 'nocap', label: 'No cap', color: t.muted, pct: 0 };
-  if (capCents === 0) return { key: 'over', label: 'Blocked', color: t.crit, pct: 1 };
-  const pct = spendCents / capCents;
-  if (pct >= 1) return { key: 'over', label: 'At limit', color: t.crit, pct };
-  if (pct >= 0.85) return { key: 'near', label: 'Near limit', color: t.serious, pct };
-  if (pct >= 0.6) return { key: 'watch', label: 'Watch', color: t.warn, pct };
-  return { key: 'ok', label: 'On track', color: t.good, pct };
+  const s = logicState(spendCents, capCents, unlimited);
+  return { key: s.key, label: s.label, color: toneColor(t, s.tone), pct: s.pct };
 }

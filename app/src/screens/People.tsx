@@ -1,12 +1,15 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, TextInput, View } from 'react-native';
 import { DataSel, Period, Range, UserRow, getUsers } from '../api';
 import { useLoad } from '../hooks';
 import { budgetState, font, modelColor, pointer, useTheme } from '../theme';
-import { Avatar, Card, Chip, Empty, Notice, Segmented, Skeleton, Txt, useTween } from '../ui';
+import { Avatar, Button, Card, Chip, Empty, ErrorState, Notice, Segmented, Skeleton, Txt, useTween } from '../ui';
 import { Ring, Sparkline } from '../charts';
 import { Icon } from '../icons';
-import { ago, int, modelShort, pct, usd } from '../format';
+import { ago, int, modelShort, oneLine, pct, pctUsedNum, usd } from '../format';
+import { GRACE_MS, badgeText, includedBoost, includesText, overdueMs, primaryOverride } from '../logic/overrides';
+import { useNow } from '../hooks';
+import { PAGE, pageWindow } from '../logic/list';
 
 type Sort = 'spend' | 'requests' | 'used' | 'name';
 
@@ -24,13 +27,17 @@ function UserCard({ u, index, period, onOpen }: { u: UserRow; index: number; per
   const { t } = useTheme();
   const b = u.budgets[period];
   const st = budgetState(t, b.spendCents, b.capCents, b.unlimited);
-  const pctShown = Math.round(useTween(st.pct) * 100);
+  const pctShown = pctUsedNum(useTween(st.pct));
+  const now = useNow(30000);
   const unit = period === 'weekly' ? 'week' : 'month';
+  const boost = primaryOverride(u.overrides);
+  const inc = includedBoost(b, u.overrides, period);           // the cap shown includes a live boost: say so, never hide it
+  const od = boost ? overdueMs(boost.o, now) : null, late = od !== null && od >= GRACE_MS;
   return (
-    <Pressable accessibilityRole="button" accessibilityLabel={`Open ${u.name}`} onPress={onOpen}
-      style={(s: any) => [{ flexGrow: 1, flexBasis: 340, minWidth: 300, maxWidth: 560 }, pointer]}>
+    <Pressable accessibilityRole="button" accessibilityLabel={`Open ${oneLine(u.name)}${boost ? ', temporary boost' : ''}`} onPress={onOpen}
+      style={(s: any) => [{ flexGrow: 1, flexBasis: 340, minWidth: 300, maxWidth: 560, flexDirection: 'column' }, pointer]}>
       {(s: any) => (
-        <Card pad={20} style={[{ gap: 18 }, s.hovered ? { borderColor: t.accent, transform: [{ translateY: -2 }] } : null, { transitionProperty: 'transform, border-color', transitionDuration: '140ms' } as any, s.hovered ? ({ boxShadow: t.shadow } as any) : null]}>
+        <Card pad={20} style={[{ gap: 18, flex: 1 }, s.hovered ? { borderColor: t.accent, transform: [{ translateY: -2 }] } : null, { transitionProperty: 'transform, border-color', transitionDuration: '140ms' } as any, s.hovered ? ({ boxShadow: t.shadow } as any) : null]}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
             <Avatar name={u.name} seed={index} />
             <View style={{ flex: 1 }}>
@@ -50,8 +57,10 @@ function UserCard({ u, index, period, onOpen }: { u: UserRow; index: number; per
               </View>
               <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
                 <Chip label={st.label} color={st.color} />
-                {b.source === 'user' || b.unlimited ? <Chip label="Personal cap" color={t.accent} /> : null}
+                {inc ? <Chip icon="bolt" label="Boosted cap" color={t.accent} /> : b.source === 'user' || b.unlimited ? <Chip label="Personal cap" color={t.accent} /> : null}
               </View>
+              {inc ? <Txt v="small" color="text2">{includesText(inc, now)}</Txt> : null}
+              {boost && !(inc && boost.o === inc && !late && !boost.more) ? <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}><Chip icon={late ? 'alert' : 'bolt'} label={badgeText(boost.o, now, boost.o.period !== period) + (boost.more ? ` +${boost.more} more` : '')} color={late ? t.crit : boost.o.status === 'active' ? t.good : t.accent} /></View> : null}
             </View>
           </View>
           <View style={{ height: 1, backgroundColor: t.border }} />
@@ -80,9 +89,11 @@ function UserCard({ u, index, period, onOpen }: { u: UserRow; index: number; per
 
 export function People({ range, data, period, onOpen }: { range: Range; data: DataSel; period: Period; onOpen: (sub: string) => void }) {
   const { t } = useTheme();
-  const { data: res, error, loading } = useLoad(() => getUsers(range, data), [range, data]);
+  const { data: res, error, loading, reload } = useLoad(() => getUsers(range, data), [range, data]);
   const [q, setQ] = useState('');
   const [sort, setSort] = useState<Sort>('spend');
+  const [shown, setShown] = useState(PAGE);
+  useEffect(() => { setShown(PAGE); }, [q, sort, period, range, data]);        // a new search or sort starts at the top again
   const users = useMemo(() => {
     const list = (res?.users ?? []).filter((u) => (u.name + ' ' + (u.email ?? '')).toLowerCase().includes(q.toLowerCase()));
     const used = (u: UserRow) => { const b = u.budgets[period]; return b.capCents ? b.spendCents / b.capCents : -1; };
@@ -93,16 +104,19 @@ export function People({ range, data, period, onOpen }: { range: Range; data: Da
     return [...list].sort(by[sort]);
   }, [res, q, sort, period]);
 
-  if (error && !res) return <Card><Empty icon="alert" title="Could not load people" hint={error} /></Card>;
+  const order = useMemo(() => new Map((res?.users ?? []).map((u, i) => [u.sub, i] as const)), [res]);
+  if (error && !res) return <Card><ErrorState title="Could not load people" message={error} onRetry={reload} /></Card>;
   if (!res) return <View style={{ gap: 16 }}><View style={{ flexDirection: 'row', gap: 16 }}>{[0, 1, 2, 3].map((i) => <Card key={i} style={{ flex: 1 }}><Skeleton h={60} /></Card>)}</View><Card><Skeleton h={260} /></Card></View>;
 
   const all = res.users;
+  const win = pageWindow(users.length, shown);
   const totalSpend = all.reduce((s, u) => s + u.budgets[period].spendCents, 0);
   const attention = all.filter((u) => ['near', 'over'].includes(budgetState(t, u.budgets[period].spendCents, u.budgets[period].capCents, u.budgets[period].unlimited).key)).length;
   const reqs = all.reduce((s, u) => s + u.requests, 0);
   const unit = period === 'weekly' ? 'week' : 'month';
   return (
     <View style={{ gap: 20 }}>
+      {error ? <Notice tone="warn" text={`${error} Showing the last data that loaded.`} /> : null}
       {res.usageConnected ? null : <Notice text="Request analytics aren't connected on this deployment, so request counts and charts are empty. Budgets and caps work normally. People appear here once they have spend or a personal cap." />}
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 16 }}>
         <Kpi label="People" value={int(all.length)} sub="seen through the gateway" />
@@ -119,15 +133,24 @@ export function People({ range, data, period, onOpen }: { range: Range; data: Da
           {q ? <Pressable accessibilityLabel="Clear search" onPress={() => setQ('')} style={pointer}><Icon name="x" size={15} color={t.muted} /></Pressable> : null}
         </View>
         <View style={{ flex: 1 }} />
-        <Txt v="small" color="muted">Sort by</Txt>
-        <Segmented small value={sort} onChange={setSort} options={[{ value: 'spend', label: 'Spend' }, { value: 'used', label: '% used' }, { value: 'requests', label: 'Requests' }, { value: 'name', label: 'Name' }]} />
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <Txt v="small" color="muted">Sort by</Txt>
+          <Segmented small value={sort} onChange={setSort} options={[{ value: 'spend', label: 'Spend' }, { value: 'used', label: '% used' }, { value: 'requests', label: 'Requests' }, { value: 'name', label: 'Name' }]} />
+        </View>
       </View>
 
+      {res.overridesError ? <Notice tone="warn" text="Temporary boosts could not be loaded (stored state unreadable): budgets still work." /> : null}
       {users.length === 0 ? <Card><Empty title={q ? 'No one matches that search' : 'No one has used the gateway yet'} hint={q ? undefined : 'People appear here after their first request through the gateway.'} /></Card> : (
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 16, opacity: loading ? 0.85 : 1 }}>
-          {users.map((u) => <UserCard key={u.sub} u={u} index={all.findIndex((x) => x.sub === u.sub)} period={period} onOpen={() => onOpen(u.sub)} />)}
+          {users.slice(0, win.count).map((u) => <UserCard key={u.sub} u={u} index={order.get(u.sub) ?? 0} period={period} onOpen={() => onOpen(u.sub)} />)}
         </View>
       )}
+      {win.left > 0 ? (
+        <View style={{ alignItems: 'center', gap: 8 }}>
+          <Txt v="small" color="muted">Showing {win.count} of {users.length} {users.length === 1 ? 'person' : 'people'}. Search and sort cover everyone.</Txt>
+          <Button label={`Show ${Math.min(PAGE, win.left)} more`} icon="chevron" onPress={() => setShown(win.next)} />
+        </View>
+      ) : null}
     </View>
   );
 }

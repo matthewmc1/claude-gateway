@@ -1,0 +1,33 @@
+{
+  "_comment": "Single source of truth for the models people can use. Edit, then `terraform apply`: the gateway policy, the model aliases pinned for every engineer, and the admin app all follow. Set price fields (USD per million tokens, from your Vertex price list) to show cost hints; null hides them.",
+  "default": "sonnet",
+  "models": [
+    {
+      "alias": "sonnet",
+      "id": "claude-sonnet-5-5",
+      "label": "Sonnet 5.5",
+      "tier": "default",
+      "description": "Everyday coding. The baseline everyone starts on.",
+      "enabled": true,
+      "pricePerMTok": { "input": null, "output": null, "cacheRead": null, "cacheWrite": null }
+    },
+    {
+      "alias": "opus",
+      "id": "claude-opus-5-5",
+      "label": "Opus 5.5",
+      "tier": "upgrade",
+      "description": "Hardest problems. Costs more and uses budget faster, so it is an explicit step up.",
+      "enabled": true,
+      "pricePerMTok": { "input": null, "output": null, "cacheRead": null, "cacheWrite": null }
+    },
+    {
+      "alias": "haiku",
+      "id": "claude-haiku-5-5",
+      "label": "Haiku 5.5",
+      "tier": "fast",
+      "description": "Fast and cheap for simple, high-volume tasks.",
+      "enabled": true,
+      "pricePerMTok": { "input": null, "output": null, "cacheRead": null, "cacheWrite": null }
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /app
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(app)"
+    groups:
+      expo:
+        patterns: ["expo*", "@expo*", "react-native*", "react", "react-dom", "react-native-web"]
+  # Base images are pinned by digest in deploy/Dockerfile.app and deploy/Dockerfile.gateway; Dependabot proposes digest bumps.
+  # (It picks up files whose name contains "Dockerfile"; if it ever stops finding these, rename them to Dockerfile.<name>
+  # under their own directory or bump the digests by hand: see the comment at the top of each file.)
+  - package-ecosystem: docker
+    directory: /deploy
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(deploy)"
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(ci)"
+  - package-ecosystem: terraform
+    directory: /terraform
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(terraform)"

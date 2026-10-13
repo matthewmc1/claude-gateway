@@ -1,28 +1,28 @@
 {
   "expo": {
-    "name": "Gateway budgets",
+    "name": "Gateway Budgets",
     "slug": "gateway-budgets",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/brand/icon-1024.png",
     "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": true
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
+        "backgroundColor": "#0d0e11",
+        "foregroundImage": "./assets/brand/adaptive-icon-foreground-1024.png",
+        "backgroundImage": "./assets/brand/adaptive-icon-background-1024.png",
+        "monochromeImage": "./assets/brand/adaptive-icon-monochrome-1024.png"
       },
       "predictiveBackGestureEnabled": false
     },
     "web": {
       "bundler": "metro",
       "output": "single",
-      "favicon": "./assets/favicon.png",
-      "name": "Gateway budgets",
+      "favicon": "./assets/brand/favicon-48.png",
+      "name": "Gateway Budgets",
       "shortName": "Budgets",
       "backgroundColor": "#0d0e11"
     },

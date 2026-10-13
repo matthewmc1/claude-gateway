@@ -12,6 +12,14 @@ const P: Record<string, string[]> = {
   sun: ['M12 2v2', 'M12 20v2', 'm4.93 4.93 1.41 1.41', 'm17.66 17.66 1.41 1.41', 'M2 12h2', 'M20 12h2', 'm6.34 17.66-1.41 1.41', 'm19.07 4.93-1.41 1.41'],
   infinity: ['M18.178 8c5.096 0 5.096 8 0 8-5.095 0-7.133-8-12.739-8-4.585 0-4.585 8 0 8 5.606 0 7.644-8 12.74-8z'],
   undo: ['M3 7v6h6', 'M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13'],
+  shield: ['M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z', 'm9 12 2 2 4-4'],
+  copy: ['M9 9h11v11H9z', 'M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1'],
+  clock: ['M12 6v6l4 2'],
+  layers: ['m12 2 10 5-10 5L2 7z', 'm2 17 10 5 10-5', 'm2 12 10 5 10-5'],
+  bolt: ['M13 2 3 14h9l-1 8 10-12h-9z'],
+  terminal: ['m4 17 6-6-6-6', 'M12 19h8'],
+  user: ['M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2'],
+  info: ['M12 16v-4', 'M12 8h.01'],
 };
 export type IconName = keyof typeof P | 'search' | 'lock';
 export function Icon({ name, size = 18, color = '#888', stroke = 1.9 }: { name: IconName; size?: number; color?: string; stroke?: number }) {
@@ -21,6 +29,8 @@ export function Icon({ name, size = 18, color = '#888', stroke = 1.9 }: { name: 
       {name === 'lock' && (<><Rect x={3} y={11} width={18} height={11} rx={2} /><Path d="M7 11V7a5 5 0 0 1 10 0v4" /></>)}
       {name === 'sun' && <Circle cx={12} cy={12} r={4} />}
       {name === 'users' && <Circle cx={9} cy={7} r={4} />}
+      {name === 'user' && <Circle cx={12} cy={7} r={4} />}
+      {(name === 'clock' || name === 'info') && <Circle cx={12} cy={12} r={10} />}
       {(P[name] || []).map((d, i) => <Path key={i} d={d} />)}
     </Svg>
   );
