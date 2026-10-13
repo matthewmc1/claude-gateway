@@ -4,7 +4,7 @@
 # deploy/build-push.sh does both. Context is filtered by deploy/Dockerfile.app.dockerignore.
 # Pinned by digest (multi-arch index of node:22-slim, resolved with `docker buildx imagetools inspect node:22-slim`).
 # Dependabot (docker ecosystem, /deploy) proposes updates; to refresh by hand, re-run the inspect command and paste the digest.
-FROM node:22-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392
+FROM node:26-slim@sha256:193fe51b64e77981119c98c2002c9e32a70e2f006fb4d25068ce0558998917f0
 WORKDIR /srv
 COPY api/server.mjs api/server.mjs
 COPY api/lib api/lib
