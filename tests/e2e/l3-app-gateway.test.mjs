@@ -312,12 +312,13 @@ describe('L3 temporary budget boosts (overrides) against the real gateway with a
     await put(tokens.ada, sub, { period: 'weekly', action: 'inherit' });
   });
 
-  test('removing the personal cap (inherit) mid-boost supersedes it, and the org default applies from then on', async () => {
+  test('removing the personal cap (inherit) mid-boost, when that was the pre-boost state, ends the boost as restored and the org default applies', async () => {
     const sub = U.d.sub;
     const r = await create(sub, {});
     assert.equal((await personal(sub, 'weekly')).amount, '20000');
     await put(tokens.ada, sub, { period: 'weekly', action: 'inherit' });
-    assert.equal((await status(r.json.id)).status, 'superseded');
+    const closed = await status(r.json.id);
+    assert.equal(closed.status, 'ended'); assert.match(closed.note, /already back at its previous value/);
     assert.deepEqual([(await eff(sub, 'weekly')).amount, (await eff(sub, 'weekly')).source], ['15000', { type: 'organization' }]);
     clock.advance(25 * H); await relogin(); await tick(tokens.ada);
     assert.equal(await personal(sub, 'weekly'), null, 'expiry does not resurrect anything');
