@@ -83,11 +83,11 @@ if ($Stamped -and -not $Dev) {
   if ($env:CLAUDE_GATEWAY_MODELS) { Notice 'ignoring the CLAUDE_GATEWAY_MODELS environment variable: this installer''s catalog is built in (use --dev to override).' }
 }
 $CatalogSrc = 'built-in table'; $DefaultsSrc = 'built-in defaults'; $CatalogOverride = $false; $DefaultsOverride = $false
-$Catalog = [ordered]@{ default = 'sonnet'; models = @(
-    [ordered]@{ alias = 'sonnet'; id = 'claude-sonnet-5-5'; label = 'Sonnet 5.5'; tier = 'default' },
+$Catalog = [ordered]@{ default = 'sonnet-4-6'; models = @(
+    [ordered]@{ alias = 'sonnet'; id = 'claude-sonnet-5-5'; family = 'sonnet'; pin = $false; label = 'Sonnet 5.5'; tier = 'previous' },
     [ordered]@{ alias = 'opus'; id = 'claude-opus-5-5'; label = 'Opus 5.5'; tier = 'upgrade' },
     [ordered]@{ alias = 'haiku'; id = 'claude-haiku-5-5'; label = 'Haiku 5.5'; tier = 'fast' },
-    [ordered]@{ alias = 'sonnet-4-6'; id = 'claude-sonnet-4-6'; family = 'sonnet'; label = 'Sonnet 4.6'; tier = 'previous' },
+    [ordered]@{ alias = 'sonnet-4-6'; id = 'claude-sonnet-4-6'; family = 'sonnet'; pin = $true; label = 'Sonnet 4.6'; tier = 'default' },
     [ordered]@{ alias = 'opus-4-6'; id = 'claude-opus-4-6'; family = 'opus'; label = 'Opus 4.6'; tier = 'previous' }) }
 $Defaults = [ordered]@{ gatewayUrl = ''; model = ''; effortLevel = 'medium'; userSettings = [ordered]@{}; gatewayInternalNetworks = @() }
 # An alias is typed on a command line; an id may also hold '@', ':' and '/' (Vertex forms such as claude-sonnet-4-5@20250929). Values only reach JSON through

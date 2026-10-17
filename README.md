@@ -34,7 +34,7 @@ Google Cloud project; nothing leaves it.
 |---|---|
 | **No keys on your laptop** | Sign in once with your work account (OIDC). No API keys, no cloud credentials. |
 | **One command to set up** | `claude-gateway-setup.sh install`. Your admin has already baked in the gateway address and sensible defaults. |
-| **A good default, an honest step up** | Sonnet 5.5 at medium effort out of the box. Moving up to Opus 5.5 is one explicit command, and the app tells you it spends budget faster. |
+| **A good default, an honest step up** | Sonnet 4.6 at medium effort out of the box. Moving up to Opus 5.5 is one explicit command, and the app tells you it spends budget faster. |
 | **See your own spend** | *My usage*: weekly and monthly budget rings, what is left, and your pace. |
 | **Know why a request failed** | Your last 10 requests with the real cause (quota, permission, budget cap), not a vague error. |
 | **Practical tips from real data** | Model mix, error rate and budget pace turned into plain advice with a copyable command. |
@@ -127,7 +127,7 @@ claude        # /login -> "Cloud gateway" -> sign in with the work account
 | Flow | What happens | Where |
 |---|---|---|
 | **Admin setup** | Define admins and defaults once; Terraform creates private services, a database, secrets, alerts, a scheduler | [`terraform/`](terraform/) |
-| **Engineer onboarding** | One installer sets the gateway, locks sign-in to it, blocks direct Anthropic/Vertex/API-key use, sets Sonnet 5.5 and medium effort | [`client/`](client/) |
+| **Engineer onboarding** | One installer sets the gateway, locks sign-in to it, blocks direct Anthropic/Vertex/API-key use, sets Sonnet 4.6 and medium effort | [`client/`](client/) |
 | **Daily use** | Requests flow through the gateway; each is attributed to a person, checked against their caps, logged | gateway |
 | **Tracking** | Usage is rolled up hourly from the gateway's own logs: per person, model and outcome, latency | `api/lib/usage` |
 | **Budget changes** | Admin signs in only when changing something; every change is attributed to them in the gateway audit trail | People, Company |

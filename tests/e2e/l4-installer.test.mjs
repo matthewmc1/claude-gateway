@@ -70,9 +70,10 @@ describe('L4 install against the real gateway', () => {
     // the gateway states the starting model explicitly (Anthropic: availableModels alone leaves the gateway-session default on the Opus alias)
     assert.equal(g.model, cat.model, 'the gateway pushes model = the catalog default (first availableModels entry)');
     assert.equal(g.model, cat.availableModels[0]);
-    // Claude 4.6 is allowed by name but pins nothing, so the alias pins stay on 5.5 (the catalog's default entries)
+    // Sonnet 4.6 is the shipped default and Sonnet pin; Opus 4.6 is allowed by name but pins nothing, so the Opus pin stays on 5.5
     for (const id of ['claude-sonnet-4-6', 'claude-opus-4-6']) assert.ok(p.availableModels.includes(id), id + ' is allowed');
-    assert.ok(!Object.values(p.env).some((id) => id.endsWith('-4-6')), 'no 4.6 pin unless an admin runs the 4.6-default recipe');
+    assert.equal(p.env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-4-6');
+    assert.equal(p.env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-5-5', 'no Opus 4.6 pin unless an admin runs the Opus half of the recipe');
     // anything the gateway pushes that the installer also writes must be identical; the rest must not collide
     for (const k of Object.keys(g)) if (k in p) assert.deepEqual(p[k], g[k], 'key ' + k);
     // client-side locks the installer adds on top
@@ -116,7 +117,7 @@ describe('L4 install against the real gateway', () => {
     assert.equal(p.env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-4-6'); assert.equal(p.env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-4-6');
     assert.equal(sb2.userSettings().model, 'claude-sonnet-4-6', 'a new engineer starts on the catalog default');
     // an invalid catalog never installs anything (fail closed)
-    const bad = readCatalog(); bad.models.find((m) => m.alias === 'sonnet-4-6').pin = true;
+    const bad = readCatalog(); bad.models.find((m) => m.alias === 'sonnet').pin = true;
     const badFile = path.join(sb2.root, 'bad.json'); fs.writeFileSync(badFile, JSON.stringify(bad));
     const sb3 = sandbox('badcat'); const r = sb3.run(['install', '--yes', '--gateway-url', E.gwUrl, '--models', badFile]);
     assert.notEqual(r.rc, 0); assert.match(r.out, /more than one model pins the sonnet family/); assert.ok(!fs.existsSync(sb3.managed));

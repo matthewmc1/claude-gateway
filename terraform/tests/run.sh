@@ -41,7 +41,10 @@ rsync -a --exclude 'terraform.tfstate*' --exclude terraform.tfvars --exclude zz_
   --exclude .terraform --exclude '.terraform.lock.hcl' --exclude 'secrets.auto.tfvars' --exclude 'backend.tf' \
   --exclude 'terraform.tfvars.bak*' --exclude tests "$TF_SRC/" "$TF/"
 cp "$REPO/config/models.json" "$BASE/config/models.json"
-cp "$BASE/config/models.json" "$S/models.orig.json"
+# The fixtures below were written against the 5.5-default catalog; derive that state from the real file (shipped default: Sonnet 4.6)
+# so they keep testing the rules, and test the real file itself where it matters (the root plan, "real models.json").
+jq '.default = "sonnet" | (.models[] | select(.alias=="sonnet")) |= del(.pin) | (.models[] | select(.alias=="sonnet") | .tier) = "default" | (.models[] | select(.alias=="sonnet-4-6") | .pin) = false | (.models[] | select(.alias=="sonnet-4-6") | .tier) = "previous"' "$BASE/config/models.json" >"$S/models.orig.json"
+cp "$BASE/config/models.json" "$S/models.shipped.json"
 
 cat > "$S/fake.tfvars" <<'TFV'
 project_id            = "fake-gateway-test"
@@ -113,7 +116,7 @@ for v in APP_STATE_BUCKET GATEWAY_SERVICE_NAME USAGE_SOURCE SCHEDULER_SA MODELS_
   [[ " $ENVS" == *" $v "* ]] && ok "app env has $v" || bad "app env missing $v"
 done
 assert "app env: USAGE_SOURCE=logs, APP_VIEW_ACCESS=open, GATEWAY_SERVICE_NAME=claude-gateway" "$P" '.resource_changes[] | select(.type=="google_cloud_run_v2_service" and .name=="app") | [.change.after.template[0].containers[0].env[] | select(.value != null) | {(.name): .value}] | add | (.USAGE_SOURCE=="logs" and .APP_VIEW_ACCESS=="open" and .GATEWAY_SERVICE_NAME=="claude-gateway")'
-assert "MODELS_JSON passes the catalog (5 models incl. Sonnet 4.6 and Opus 4.6, default sonnet)" "$P" '.resource_changes[] | select(.type=="google_cloud_run_v2_service" and .name=="app") | [.change.after.template[0].containers[0].env[] | select(.name=="MODELS_JSON") | .value][0] | fromjson | (.default=="sonnet" and (.models|length)==5 and ([.models[].id] | (contains(["claude-sonnet-4-6","claude-opus-4-6"]))))'
+assert "MODELS_JSON passes the catalog (5 models incl. Sonnet 4.6 and Opus 4.6, default sonnet-4-6)" "$P" '.resource_changes[] | select(.type=="google_cloud_run_v2_service" and .name=="app") | [.change.after.template[0].containers[0].env[] | select(.name=="MODELS_JSON") | .value][0] | fromjson | (.default=="sonnet-4-6" and (.models|length)==5 and ([.models[].id] | (contains(["claude-sonnet-4-6","claude-opus-4-6"]))))'
 assert "the system key and read key are secret-backed (no plaintext env)" "$P" '.resource_changes[] | select(.type=="google_cloud_run_v2_service" and .name=="app") | [.change.after.template[0].containers[0].env[] | select(.name=="GATEWAY_SYSTEM_WRITE_KEY" or .name=="GATEWAY_ADMIN_READ_KEY") | (.value == null or .value == "")] | all'
 assert "log retention is not managed by default (project-wide bucket untouched)" "$P" '[.resource_changes[] | select(.type=="google_logging_project_bucket_config")] | length == 0'
 assert "outputs: client_defaults, oidc_redirect_uri, oidc_setup_steps, proxy_command, client_install_hint, admin_credentials exist" "$P" '.output_changes | (has("client_defaults") and has("oidc_redirect_uri") and has("oidc_setup_steps") and has("oidc_console_url") and has("oidc_consent_screen_url") and has("proxy_command") and has("client_install_hint") and has("admin_credentials"))'
@@ -568,6 +571,13 @@ if render a3 "$S/models.orig.json" "$UP2" "$ADM3" '{"access_type":"offline","pro
   assert "2 upstreams, second in us-east5 / proj-b" "$(Y a3)" '.upstreams | (length==2 and .[1].region=="us-east5" and .[1].project_id=="proj-b" and .[1].provider=="vertex")'
   assert "extra auth params (access_type, prompt, hd) rendered" "$(Y a3)" '.oidc.extra_auth_params == {"access_type":"offline","prompt":"consent","hd":"example.com"}'
 else bad "render a3"; tail -12 "$S/out/r_a3.log"; fi
+
+# the catalog as shipped: Sonnet 4.6 is the starting model and the Sonnet pin; Opus stays on 5.5
+if render shipped "$S/models.shipped.json" "$UP1" "$ADM1"; then
+  assert "shipped catalog: availableModels starts with Sonnet 4.6 and allows everything else" "$(Y shipped)" ".managed.policies[0].code | (.availableModels==[\"$S46\",\"$SON\",\"$OPU\",\"$HAI\",\"$O46\"] and .enforceAvailableModels==true)"
+  assert "shipped catalog: the policy starts everyone on Sonnet 4.6" "$(Y shipped)" ".managed.policies[0].code | (.model==\"$S46\" and .model==.availableModels[0])"
+  assert "shipped catalog: pins are Sonnet 4.6, Opus 5.5, Haiku 5.5" "$(Y shipped)" ".managed.policies[0].code.env == {\"ANTHROPIC_DEFAULT_SONNET_MODEL\":\"$S46\",\"ANTHROPIC_DEFAULT_OPUS_MODEL\":\"$OPU\",\"ANTHROPIC_DEFAULT_HAIKU_MODEL\":\"$HAI\"}"
+else bad "render shipped"; tail -12 "$S/out/r_shipped.log"; fi
 
 # models disabled / default switched / 4th model
 jq '(.models[] | select(.alias=="opus") | .enabled) = false' "$S/models.orig.json" >"$S/m_noopus.json"

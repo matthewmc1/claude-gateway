@@ -96,17 +96,17 @@ OUT="$(env -i PATH="$PATH" HOME="/nonexistent-cgs-home" CLAUDE_MANAGED_DIR="$M" 
 rc_fails "guard refuses a default ~/.claude that is outside the test root"; has "TEST GUARD"
 
 section "no-argument install from defaults.json"
-fresh; printf '{"gatewayUrl":"https://gw.example.test","model":"sonnet","effortLevel":"medium","userSettings":{}}' > "$S/defaults.json"
+fresh; printf '{"gatewayUrl":"https://gw.example.test","model":"sonnet-4-6","effortLevel":"medium","userSettings":{}}' > "$S/defaults.json"
 run install --yes
 rc_is 0 "install with no arguments succeeds"; has "from $S/defaults.json" "reports the gateway came from defaults.json"
 json_is "$(MF)" 'd["forceLoginGatewayUrl"]' "https://gw.example.test" "policy gateway URL from defaults.json"
 json_is "$(MF)" 'd["forceLoginMethod"]' gateway "forceLoginMethod is gateway"
 json_is "$(MF)" 'd["parentSettingsBehavior"]' merge "parentSettingsBehavior merge"
 json_is "$(MF)" 'd["allowedProviders"]' '["gateway"]' "allowedProviders is gateway only"
-json_is "$(MF)" 'd["availableModels"]' "[\"$SONNET\", \"$OPUS\", \"$HAIKU\", \"$SONNET46\", \"$OPUS46\"]" "availableModels default-first from the catalog"
+json_is "$(MF)" 'd["availableModels"]' "[\"$SONNET46\", \"$SONNET\", \"$OPUS\", \"$HAIKU\", \"$OPUS46\"]" "availableModels default-first from the catalog"
 json_is "$(MF)" 'd["enforceAvailableModels"]' true "enforceAvailableModels"
-json_is "$(MF)" 'd["env"]' "{\"ANTHROPIC_DEFAULT_SONNET_MODEL\": \"$SONNET\", \"ANTHROPIC_DEFAULT_OPUS_MODEL\": \"$OPUS\", \"ANTHROPIC_DEFAULT_HAIKU_MODEL\": \"$HAIKU\"}" "model pins generated from the catalog"
-json_is "$(UF)" 'd["model"]' "$SONNET" "user default model is sonnet"
+json_is "$(MF)" 'd["env"]' "{\"ANTHROPIC_DEFAULT_SONNET_MODEL\": \"$SONNET46\", \"ANTHROPIC_DEFAULT_OPUS_MODEL\": \"$OPUS\", \"ANTHROPIC_DEFAULT_HAIKU_MODEL\": \"$HAIKU\"}" "model pins generated from the catalog"
+json_is "$(UF)" 'd["model"]' "$SONNET46" "user default model is the catalog default (Sonnet 4.6)"
 json_is "$(UF)" 'd["effortLevel"]' medium "user default effort is medium"
 has "/login" "next steps mention /login"; has "Cloud gateway" "next steps mention Cloud gateway"
 
@@ -163,7 +163,7 @@ json_is "$(UF)" 'd["env"]' '{"FOO": "1"}' "unrelated env preserved"
 json_is "$(UF)" 'd["model"]' "$OPUS" "an allowed model you chose earlier is kept"
 json_is "$(UF)" 'd["effortLevel"]' medium "missing effort filled with the default"
 printf '{"model":"claude-opus-4-1","effortLevel":"ludicrous"}' > "$(UF)"; run install --yes
-json_is "$(UF)" 'd["model"]' "$SONNET" "a model outside the catalog is replaced by the default"
+json_is "$(UF)" 'd["model"]' "$SONNET46" "a model outside the catalog is replaced by the default"
 json_is "$(UF)" 'd["effortLevel"]' medium "an invalid effort is replaced"
 printf '{ not json' > "$(UF)"; run install --yes; rc_fails "invalid user settings JSON is refused, not overwritten"; has "not valid JSON"
 equal "$(cat "$(UF)")" "{ not json" "invalid file left untouched"
@@ -175,7 +175,7 @@ fresh; mkdir -p "$M"; printf '{"permissions":{"deny":["WebFetch"]},"env":{"KEEP_
 run install --yes --gateway-url https://gw.example.test; rc_is 0 "install over an existing policy"
 json_is "$(MF)" 'd["permissions"]' '{"deny": ["WebFetch"]}' "unrelated managed keys preserved"
 json_is "$(MF)" 'd["env"]["KEEP_ME"]' 1 "unrelated managed env preserved"
-json_is "$(MF)" 'd["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"]' "$SONNET" "pins merged into env"
+json_is "$(MF)" 'd["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"]' "$SONNET46" "pins merged into env"
 json_is "$(MF)" 'd["forceLoginMethod"]' gateway "owned key corrected"
 equal "$(baks)" 1 "a backup was kept because the policy changed"
 equal "$(python3 -I -c 'import json,glob,sys; print(json.load(open(glob.glob(sys.argv[1]+"/managed-settings.json.bak.*")[0]))["forceLoginMethod"])' "$M")" claudeai "the backup holds the previous policy"
@@ -206,7 +206,7 @@ d["permissions"] = {"deny": ["x"]}; json.dump(d, open(p, "w"), indent=2)
 PY
 run status; rc_fails "status fails on drift"; has "out of date" "status reports drift"; has "availableModels" "names the drifted key"; has "ANTHROPIC_DEFAULT_OPUS_MODEL" "names the drifted pin"
 run update --yes; rc_is 0 "update"; has "changed" "update lists what it changed"
-json_is "$(MF)" 'd["availableModels"]' "[\"$SONNET\", \"$OPUS\", \"$HAIKU\", \"$SONNET46\", \"$OPUS46\"]" "update restored availableModels"
+json_is "$(MF)" 'd["availableModels"]' "[\"$SONNET46\", \"$SONNET\", \"$OPUS\", \"$HAIKU\", \"$OPUS46\"]" "update restored availableModels"
 json_is "$(MF)" 'd["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"]' "$OPUS" "update restored the pin"
 json_is "$(MF)" 'd["permissions"]' '{"deny": ["x"]}' "update kept unrelated keys"
 json_is "$(MF)" 'd["forceLoginGatewayUrl"]' "http://127.0.0.1:$PORT" "update kept the installed gateway URL"
@@ -222,11 +222,11 @@ c["models"].append({"alias": "retired", "id": "claude-retired-5-5", "label": "Re
 json.dump(c, open(sys.argv[2], "w"), indent=2)
 PY
 printf '{"gatewayUrl":"https://gw.example.test"}' > "$S/defaults.json"; run install --yes; rc_is 0 "install with an extended catalog"
-json_is "$(MF)" 'd["availableModels"]' "[\"$SONNET\", \"$OPUS\", \"$HAIKU\", \"$SONNET46\", \"$OPUS46\", \"claude-mythos-5-5\"]" "new model flows into availableModels, disabled one does not"
+json_is "$(MF)" 'd["availableModels"]' "[\"$SONNET46\", \"$SONNET\", \"$OPUS\", \"$HAIKU\", \"$OPUS46\", \"claude-mythos-5-5\"]" "new model flows into availableModels, disabled one does not"
 run model mythos; rc_is 0 "model <new alias> works"; json_is "$(UF)" 'd["model"]' claude-mythos-5-5 "new model written as its id"
 run model claude-mythos-5-5; rc_is 0 "model <new id> works"
 run model retired; rc_fails "a disabled model is rejected"
-run reset; json_is "$(UF)" 'd["model"]' "$SONNET" "reset returns to the default"
+run reset; json_is "$(UF)" 'd["model"]' "$SONNET46" "reset returns to the default"
 run model mythos --models "$ROOT/config/models.json"; rc_fails "--models <other catalog> overrides models.json next to the script"
 fresh; cp "$ROOT/config/models.json" "$D/cat.json"; EXTRA=(CLAUDE_GATEWAY_MODELS="$D/cat.json"); run install --yes --gateway-url https://gw.example.test; rc_is 0 "CLAUDE_GATEWAY_MODELS catalog"
 fresh; printf '{"models":[]}' > "$S/models.json"; run install --yes --gateway-url https://gw.example.test; rc_fails "an empty catalog is rejected"
@@ -242,7 +242,7 @@ run upgrade; rc_fails "upgrade with no upgrade-tier model says so"; has "no mode
 section "upgrade / downgrade / model / effort / reset"
 fresh; printf '{"gatewayUrl":"https://gw.example.test"}' > "$S/defaults.json"; run install --yes
 run upgrade; rc_is 0 "upgrade"; json_is "$(UF)" 'd["model"]' "$OPUS" "upgrade -> opus (catalog upgrade tier)"; json_is "$(UF)" 'd["effortLevel"]' medium "effort untouched by upgrade"
-run downgrade; rc_is 0 "downgrade"; json_is "$(UF)" 'd["model"]' "$SONNET" "downgrade -> default model"
+run downgrade; rc_is 0 "downgrade"; json_is "$(UF)" 'd["model"]' "$SONNET46" "downgrade -> default model"
 run model haiku; json_is "$(UF)" 'd["model"]' "$HAIKU" "model <alias>"
 run model "$OPUS"; json_is "$(UF)" 'd["model"]' "$OPUS" "model <catalog id>"
 run effort xhigh; rc_is 0 "effort xhigh"; json_is "$(UF)" 'd["effortLevel"]' xhigh "effort written"
@@ -251,7 +251,7 @@ run model claude-opus-4-1; rc_fails "an id that is not in the catalog is rejecte
 run model; rc_fails "model with no name fails"
 run effort ultra; rc_fails "unknown effort rejected"; run effort max; rc_fails "effort max is session-only"; run effort; rc_fails "effort with no level fails"
 json_is "$(UF)" 'd["effortLevel"]' xhigh "rejected effort changes nothing"
-run reset; rc_is 0 "reset"; json_is "$(UF)" 'd["model"]' "$SONNET" "reset model"; json_is "$(UF)" 'd["effortLevel"]' medium "reset effort"
+run reset; rc_is 0 "reset"; json_is "$(UF)" 'd["model"]' "$SONNET46" "reset model"; json_is "$(UF)" 'd["effortLevel"]' medium "reset effort"
 printf '{"theme":"dark","model":"%s"}' "$OPUS" > "$(UF)"; run reset; json_is "$(UF)" 'd["theme"]' dark "reset keeps your other settings"
 fresh; printf '{"gatewayUrl":"https://gw.example.test","model":"opus","effortLevel":"high"}' > "$S/defaults.json"; run install --yes
 run model haiku; run effort low; run reset; json_is "$(UF)" 'd["model"]' "$OPUS" "reset goes to the admin's default model (opus here)"; json_is "$(UF)" 'd["effortLevel"]' high "reset goes to the admin's default effort"
@@ -287,7 +287,7 @@ fresh; mkdir -p "$M" "$U"; printf '{"permissions":{"deny":["WebFetch"]},"env":{"
 run install --yes --gateway-url https://gw.example.test; run uninstall --yes; rc_is 0 "uninstall"
 json_is "$(MF)" 'sorted(d.keys())' '["env", "permissions"]' "only what install added is removed from the policy"
 json_is "$(MF)" 'd["env"]' '{"KEEP_ME": "1"}' "unrelated managed env kept"
-json_is "$(UF)" 'd["theme"]' dark "user settings left alone"; json_is "$(UF)" 'd["model"]' "$SONNET" "user model left alone"
+json_is "$(UF)" 'd["theme"]' dark "user settings left alone"; json_is "$(UF)" 'd["model"]' "$SONNET46" "user model left alone"
 fresh; run install --yes --gateway-url https://gw.example.test; run uninstall --yes
 absent "$(MF)" "a policy that only held our keys is removed entirely"; equal "$(baks)" 1 "with a backup"
 run uninstall --yes; rc_is 0 "uninstall when nothing is installed is harmless"; has "no system policy"
@@ -312,7 +312,7 @@ cp "$D/tampered.sh" "$P/claude-gateway-setup.sh"
 equal "$(ls "$P" | tr '\n' ' ')" "SHA256SUMS claude-gateway-setup.ps1 claude-gateway-setup.sh " "output folder holds only the three expected files"
 S="$P"; SH="$P/claude-gateway-setup.sh"; run install --yes
 rc_is 0 "packaged installer installs with no arguments and no side files"; json_is "$(MF)" 'd["forceLoginGatewayUrl"]' https://pkg.example.test "packaged URL"
-json_is "$(MF)" 'd["availableModels"]' "[\"$SONNET\", \"$OPUS\", \"$HAIKU\", \"$SONNET46\", \"$OPUS46\"]" "packaged catalog"; json_is "$(UF)" 'd["model"]' "$SONNET" "packaged default model"
+json_is "$(MF)" 'd["availableModels"]' "[\"$SONNET46\", \"$SONNET\", \"$OPUS\", \"$HAIKU\", \"$OPUS46\"]" "packaged catalog"; json_is "$(UF)" 'd["model"]' "$SONNET46" "packaged default model"
 has "stamped" "says where the gateway came from"
 if grep -q 'sk-\|BEGIN .*PRIVATE' "$P/claude-gateway-setup.sh"; then fail "no secrets in the stamped file"; else pass "no secrets in the stamped file"; fi
 grep -q '^STAMP_GATEWAY_URL_B64=""' "$SRC" && pass "the source installer has no stamped URL" || fail "the source installer must keep STAMP_GATEWAY_URL_B64 empty"
@@ -463,7 +463,7 @@ rm -rf "$M" "$U"; run install --yes --gateway-url "http://127.0.0.1:$PORT"; rc_f
 fresh; mkdir -p "$U" "$D/real"; printf '{"theme":"dark"}' > "$D/real/settings.json"; chmod 644 "$D/real/settings.json"; ln -s "$D/real/settings.json" "$(UF)"
 run install --yes --gateway-url https://gw.example.test; rc_is 0 "install over a symlinked settings.json"
 if [ -L "$(UF)" ]; then pass "the symlink is preserved"; else fail "the symlink was replaced by a regular file"; fi
-json_is "$D/real/settings.json" 'd["model"]' "$SONNET" "the link target received the settings"; json_is "$D/real/settings.json" 'd["theme"]' dark "and kept the existing ones"
+json_is "$D/real/settings.json" 'd["model"]' "$SONNET46" "the link target received the settings"; json_is "$D/real/settings.json" 'd["theme"]' dark "and kept the existing ones"
 equal "$(modeof "$D/real/settings.json")" 644 "the target's file mode is preserved"
 run model haiku; if [ -L "$(UF)" ]; then pass "still a symlink after 'model'"; else fail "symlink replaced by 'model'"; fi; json_is "$D/real/settings.json" 'd["model"]' "$HAIKU" "'model' wrote through the link"
 equal "$(find "$U" "$D/real" -name '.settings.*' | wc -l | tr -d ' ')" 0 "no temp files left behind"
@@ -564,20 +564,25 @@ RECIPE='c["default"]="sonnet-4-6"
 for m in c["models"]:
     if m["alias"] in ("sonnet", "opus"): m["pin"]=False
     if m["alias"] in ("sonnet-4-6", "opus-4-6"): m["pin"]=True'
+LEGACY='c["default"]="sonnet"
+for m in c["models"]:
+    if m["alias"]=="sonnet": m["pin"]=True
+    if m["alias"]=="sonnet-4-6": m["pin"]=False'
 fresh; printf '{"gatewayUrl":"http://127.0.0.1:%s"}' "$PORT" > "$S/defaults.json"; run install --yes; rc_is 0 "install with the shipped catalog"
-json_is "$(MF)" 'sorted(d["env"].items())' "[[\"ANTHROPIC_DEFAULT_HAIKU_MODEL\", \"$HAIKU\"], [\"ANTHROPIC_DEFAULT_OPUS_MODEL\", \"$OPUS\"], [\"ANTHROPIC_DEFAULT_SONNET_MODEL\", \"$SONNET\"]]" "4.6 entries are allowed but not pinned: the pins stay on 5.5"
+json_is "$(MF)" 'sorted(d["env"].items())' "[[\"ANTHROPIC_DEFAULT_HAIKU_MODEL\", \"$HAIKU\"], [\"ANTHROPIC_DEFAULT_OPUS_MODEL\", \"$OPUS\"], [\"ANTHROPIC_DEFAULT_SONNET_MODEL\", \"$SONNET46\"]]" "Sonnet 4.6 is the Sonnet pin; Opus 4.6 is allowed but not pinned (Opus stays on 5.5)"
 run model sonnet-4-6; rc_is 0 "model sonnet-4-6"; json_is "$(UF)" 'd["model"]' "$SONNET46" "model <4.6 alias> writes the id (the setting the model command always uses)"
-has "Sonnet 4.6" "names the model"; has "earlier model generation" "explains the previous tier"; has "gateway policy sets a starting model" "says a policy starting model outranks the setting"
-json_is "$(MF)" 'd["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"]' "$SONNET" "choosing 4.6 does not touch the policy pin"
+run model sonnet; rc_is 0 "model sonnet (the 5.5 entry, by alias)"; json_is "$(UF)" 'd["model"]' "$SONNET" "writes the 5.5 id"
+has "Sonnet 5.5" "names the model"; has "not the company default" "explains the previous tier"; has "gateway policy sets a starting model" "says a policy starting model outranks the setting"
+json_is "$(MF)" 'd["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"]' "$SONNET46" "choosing 5.5 does not touch the policy pin"
 run model OPUS-4-6; rc_is 0 "model <alias> is case-insensitive"; json_is "$(UF)" 'd["model"]' "$OPUS46" "opus 4.6 written as its id"
 run model "$SONNET46"; rc_is 0 "model <4.6 id>"; json_is "$(UF)" 'd["model"]' "$SONNET46" "4.6 id accepted"
-run status; rc_is 0 "status accepts a 4.6 choice"; has "default model setting: Sonnet 4.6 (not the company default, Sonnet 5.5" "status shows a 4.6 setting as not the company default"
+run model sonnet; run status; rc_is 0 "status accepts a non-default choice"; has "default model setting: Sonnet 5.5 (not the company default, Sonnet 4.6" "status shows a 5.5 setting as not the company default"
 lacks "your choice" "and no longer claims the engineer chose it"
-run downgrade; json_is "$(UF)" 'd["model"]' "$SONNET" "downgrade goes back to the company default"
+run downgrade; json_is "$(UF)" 'd["model"]' "$SONNET46" "downgrade goes back to the company default"
 run upgrade; json_is "$(UF)" 'd["model"]' "$OPUS" "upgrade still means the upgrade tier (Opus 5.5), not a 4.6 entry"
 fresh; run install --yes --gateway-url https://gw.example.test --model sonnet-4-6; rc_is 0 "install --model sonnet-4-6"
 json_is "$(UF)" 'd["model"]' "$SONNET46" "install --model sets the user's model"; has "from --model" "and says so"
-json_is "$(MF)" 'd["availableModels"][0]' "$SONNET" "policy default unchanged by --model"
+json_is "$(MF)" 'd["availableModels"][0]' "$SONNET46" "policy default unchanged by --model"
 run install --yes --gateway-url https://gw.example.test; json_is "$(UF)" 'd["model"]' "$SONNET46" "a later plain install keeps that choice"
 run install --yes --gateway-url https://gw.example.test --model=claude-opus-4-6; rc_is 0 "install --model=<id> replaces an existing choice"; json_is "$(UF)" 'd["model"]' "$OPUS46" "and wins over it"
 fresh; run install --yes --gateway-url https://gw.example.test --model gpt-5; rc_fails "install --model with an unknown model fails"; has "unknown model"; absent "$M" "and writes nothing"; absent "$U" "not even user settings"
@@ -599,7 +604,7 @@ run model sonnet; rc_is 0 "recipe: the 5.5 entries can still be chosen"; json_is
 run reset; json_is "$(UF)" 'd["model"]' "$SONNET46" "recipe: reset goes to 4.6"
 # a machine installed before the recipe sees drift and update repairs it
 fresh; printf '{"gatewayUrl":"https://gw.example.test"}' > "$S/defaults.json"; run install --yes; catmod "$RECIPE" "$S/models.json"
-run status; rc_fails "switching the catalog to the recipe shows up as drift"; has "ANTHROPIC_DEFAULT_SONNET_MODEL" "names the pin that moved"
+run status; rc_fails "switching the catalog to the recipe shows up as drift"; has "ANTHROPIC_DEFAULT_OPUS_MODEL" "names the pin that moved"
 run update --yes; rc_is 0 "update applies the recipe"; json_is "$(MF)" 'd["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"]' "$OPUS46" "opus pin moved to 4.6"
 json_is "$(MF)" 'd["availableModels"][0]' "$SONNET46" "default moved to 4.6"
 # a disabled implicit pin does not collide with an explicit one
@@ -613,7 +618,7 @@ printf '%s' "$OUT" > "$D/pm.json"; json_is "$D/pm.json" 'd["env"]["ANTHROPIC_DEF
 fresh; catmod 'c["models"].append({"alias":"fast-sonnet","id":"claude-sonnet-x","family":"sonnet","tier":"x"})
 c["default"]="fast-sonnet"
 for m in c["models"]:
-    if m["alias"]=="sonnet": m["pin"]=False
+    if m["alias"] in ("sonnet", "sonnet-4-6"): m["pin"]=False
 c["models"][-1]["pin"]=True' "$S/models.json"
 run_out print-managed --gateway-url https://gw.example.test; printf '%s' "$OUT" > "$D/pm.json"; json_is "$D/pm.json" 'd["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"]' claude-sonnet-x "a custom alias can pin a family when given family and pin"
 # invalid catalogs are refused, loudly, and never leave the machine half-configured or unlocked
@@ -626,7 +631,7 @@ bad_cat() {   # bad_cat <python edit> <expected words>
 bad_cat 'c["models"][3]["alias"]="sonnet"' "aliases must be unique"
 bad_cat 'c["models"][3]["alias"]="SONNET"' "aliases must be unique"
 bad_cat 'c["models"][3]["id"]=c["models"][0]["id"]' "ids must be unique"
-bad_cat 'c["models"][3]["pin"]=True' "more than one model pins the sonnet family"
+bad_cat 'c["models"][0]["pin"]=True' "more than one model pins the sonnet family"
 bad_cat 'c["models"][3]["family"]="sonnet"; c["models"][4]["family"]="sonnet"; c["models"][4]["pin"]=True; c["models"][3]["pin"]=True; c["models"][0]["pin"]=False' "more than one model pins the sonnet family"
 bad_cat 'c["default"]="nope"' "must be the alias or id of a model"
 bad_cat 'c["default"]="opus-4-6"; c["models"][4]["enabled"]=False' "must be enabled"
@@ -637,7 +642,7 @@ bad_cat 'c["models"][3]["pin"]="yes"' "pin"
 bad_cat 'c["models"][3]["family"]=5' "family"
 # fail closed on a machine that already has a policy: a bad catalog must not rewrite or remove it
 fresh; printf '{"gatewayUrl":"https://gw.example.test"}' > "$S/defaults.json"; run install --yes; cp "$(MF)" "$D/before.json"; cp "$(UF)" "$D/ubefore.json"
-catmod 'c["models"][3]["pin"]=True' "$S/models.json"
+catmod 'c["models"][0]["pin"]=True' "$S/models.json"
 run update --yes; rc_fails "update with an invalid catalog fails"; equal "$(cat "$(MF)")" "$(cat "$D/before.json")" "the installed policy is untouched (still locked down)"
 run model sonnet-4-6; rc_fails "model with an invalid catalog fails"; equal "$(cat "$(UF)")" "$(cat "$D/ubefore.json")" "user settings untouched"
 run status; rc_fails "status with an invalid catalog fails"
@@ -697,7 +702,7 @@ done
 
 section "round 4: an unpinned family is called out"
 fresh; catmod 'for m in c["models"]:
-    if m["alias"]=="sonnet": m["pin"]=False' "$S/models.json"
+    if m["alias"]=="sonnet-4-6": m["pin"]=False' "$S/models.json"
 run install --yes --gateway-url https://gw.example.test; rc_is 0 "a legal catalog that leaves sonnet unpinned installs"; has "no model pins the sonnet family (sonnet, sonnet-4-6)" "with a warning naming the family and its entries"
 run update --yes; has "no model pins the sonnet family" "update warns too"
 run status; has "no model pins the sonnet family" "status warns too"
@@ -706,7 +711,7 @@ fresh; run install --yes --gateway-url https://gw.example.test; lacks "no model 
 fresh; catmod "$RECIPE" "$S/models.json"; run install --yes --gateway-url https://gw.example.test; lacks "no model pins" "the recipe moves the pin, so there is no warning"
 
 section "round 4: uninstall after the catalog changed blames the catalog, not an admin"
-fresh; run install --yes --gateway-url https://gw.example.test; catmod "$RECIPE" "$D/recipe.json"
+fresh; run install --yes --gateway-url https://gw.example.test; catmod "$LEGACY" "$D/recipe.json"
 run uninstall --yes --models "$D/recipe.json"; rc_is 0 "uninstall with a different catalog than the one installed"
 lacks "an admin changed them." "no longer blames 'an admin' alone"; has "another version or model catalog wrote them" "names the catalog as a cause"; has "sign-in lock itself is gone" "says the lock is already gone"; has "uninstall --force" "and offers --force in the same message"
 json_is "$(MF)" '"forceLoginGatewayUrl" in d' false "the lock keys were removed"; json_is "$(MF)" '"availableModels" in d' true "the model list was left"

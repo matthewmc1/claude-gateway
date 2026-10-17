@@ -1,15 +1,17 @@
 {
   "_comment": "Single source of truth for the models people can use. Edit, then `terraform apply`: the gateway policy, the model aliases pinned for every engineer, and the admin app all follow. Set price fields (USD per million tokens, from your Vertex price list) to show cost hints; null hides them. Every enabled entry is allowed (availableModels); the \"default\" entry is listed first AND set as the policy's starting `model`, because Anthropic documents that availableModels alone does not change a gateway session's default (the Opus the opus alias resolves to). Optional \"family\" (sonnet|opus|haiku; defaults to the alias when it is one of those) and \"pin\" (default true only when alias == family): only a pinned entry sets ANTHROPIC_DEFAULT_<FAMILY>_MODEL, at most one per family; a family with entries but no pin is flagged. To run 4.6 as the default for everyone: set \"default\" to \"sonnet-4-6\"; give sonnet-4-6 and opus-4-6 \"pin\": true and sonnet and opus \"pin\": false; swap their \"tier\" values (4.6 takes \"default\"/\"upgrade\", the 5.5 entries become \"previous\") and reword the descriptions; copy this file to client/models.json; terraform apply; rebuild the installer with scripts/package-client.sh and have people run `update`. Claude 4.6 on Vertex is served from global, us-east5, europe-west1 and asia-southeast1 (not europe-west2).",
-  "default": "sonnet",
+  "default": "sonnet-4-6",
   "models": [
     {
       "alias": "sonnet",
       "id": "claude-sonnet-5-5",
       "label": "Sonnet 5.5",
-      "tier": "default",
-      "description": "Everyday coding. The baseline everyone starts on.",
+      "tier": "previous",
+      "description": "The newer Sonnet generation, available by name when you want to try it.",
       "enabled": true,
-      "pricePerMTok": { "input": null, "output": null, "cacheRead": null, "cacheWrite": null }
+      "pricePerMTok": { "input": null, "output": null, "cacheRead": null, "cacheWrite": null },
+      "pin": false,
+      "family": "sonnet"
     },
     {
       "alias": "opus",
@@ -34,10 +36,11 @@
       "id": "claude-sonnet-4-6",
       "family": "sonnet",
       "label": "Sonnet 4.6",
-      "tier": "previous",
-      "description": "The previous Sonnet generation, available by name when you need it.",
+      "tier": "default",
+      "description": "Everyday coding. The baseline everyone starts on.",
       "enabled": true,
-      "pricePerMTok": { "input": null, "output": null, "cacheRead": null, "cacheWrite": null }
+      "pricePerMTok": { "input": null, "output": null, "cacheRead": null, "cacheWrite": null },
+      "pin": true
     },
     {
       "alias": "opus-4-6",

@@ -8,12 +8,12 @@ export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const LOOPBACK = new Set(['127.0.0.1', '::1', 'localhost']);
 
 const BUILTIN_CATALOG = {
-  default: 'sonnet',
+  default: 'sonnet-4-6',
   models: [
-    { alias: 'sonnet', id: 'claude-sonnet-5-5', label: 'Sonnet 5.5', tier: 'default', description: 'Everyday coding. The baseline.', enabled: true },
+    { alias: 'sonnet', id: 'claude-sonnet-5-5', family: 'sonnet', pin: false, label: 'Sonnet 5.5', tier: 'previous', description: 'The newer Sonnet generation, available by name.', enabled: true },
     { alias: 'opus', id: 'claude-opus-5-5', label: 'Opus 5.5', tier: 'upgrade', description: 'Hardest problems. Costs more.', enabled: true },
     { alias: 'haiku', id: 'claude-haiku-5-5', label: 'Haiku 5.5', tier: 'fast', description: 'Fast and cheap for simple tasks.', enabled: true },
-    { alias: 'sonnet-4-6', id: 'claude-sonnet-4-6', family: 'sonnet', label: 'Sonnet 4.6', tier: 'previous', description: 'The previous Sonnet generation.', enabled: true },
+    { alias: 'sonnet-4-6', id: 'claude-sonnet-4-6', family: 'sonnet', pin: true, label: 'Sonnet 4.6', tier: 'default', description: 'Everyday coding. The baseline.', enabled: true },
     { alias: 'opus-4-6', id: 'claude-opus-4-6', family: 'opus', label: 'Opus 4.6', tier: 'previous', description: 'The previous Opus generation.', enabled: true },
   ],
 };

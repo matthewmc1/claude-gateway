@@ -269,8 +269,8 @@ If something fails, see [Troubleshooting](#9-troubleshooting).
 
 ## 7. Models: enable Sonnet 4.6 and Opus 4.6
 
-The catalog (`config/models.json`) contains Sonnet 5.5, Opus 5.5, Haiku 5.5 **and** Sonnet 4.6 (`claude-sonnet-4-6`) and Opus 4.6
-(`claude-opus-4-6`). 5.5 stays the default; 4.6 is allowed for everyone. Changing the catalog needs a `terraform apply` (the gateway
+The catalog (`config/models.json`) contains Sonnet 4.6 (`claude-sonnet-4-6`), Opus 4.6 (`claude-opus-4-6`), Sonnet 5.5, Opus 5.5 and Haiku 5.5.
+**Sonnet 4.6 is the default** and the Sonnet pin; Opus stays on 5.5 unless you apply the recipe below; everything else is allowed by name. Changing the catalog needs a `terraform apply` (the gateway
 policy, engineer aliases and the app all follow) **and** a rebuilt installer (below).
 
 **How the default model is decided.** The gateway policy (`gateway.yaml`, delivered when Claude Code signs in) lists every enabled model in
@@ -283,32 +283,32 @@ a session with `/model`, or start one with `claude --model <id>`. **(precedence 
 
 ### Step 1: make the models available in Google Cloud
 
-1. In the Cloud Console open Vertex AI, Model Garden, find *Claude Sonnet 4.6* (and *Opus 4.6*), and **Enable** them for the project.
+1. In the Cloud Console open Vertex AI, Model Garden, find *Claude Sonnet 4.6* and **Enable** it for the project. This is **required**: it is the company default, so every session fails until it is enabled. Do the same for *Opus 4.6* if you keep it in the catalog, and for the 5.5 models you allow.
 2. Check quota for the region you use (quota names look like `global_online_prediction_requests_per_base_model`; Google's
    published defaults for 4.6 are 1,500 requests/min for Sonnet (1,800 in `europe-west1`) and 200 for Opus, 400 for Opus on the global endpoint).
 3. Pick the region carefully. Claude 4.6 is served from **`global`**, `us-east5`, `europe-west1` and `asia-southeast1`. It is **not**
    served from `europe-west2`. Cloud Run and Cloud SQL may live anywhere; the Vertex *upstream* region is `vertex_region`
    (default `global`, which is right). Terraform warns (`check`) if an upstream region is not in that list while 4.6 is enabled; set
-   `"enabled": false` on the two 4.6 entries if you never use them and want the warning gone.
+   `"enabled": false` on `opus-4-6` if you never use it and want the warning gone (Sonnet 4.6 is the default, so use `vertex_region = "global"`).
 
 ### Step 2: choose who gets which model
 
 | Goal | What to do |
 |---|---|
-| Allow 4.6, keep 5.5 as the default (the shipped state) | nothing; run `terraform apply` after pulling this version |
-| **Run Sonnet 4.6 as the default for everyone** | the recipe below |
-| Remove 4.6 | set `"enabled": false` on the two 4.6 entries; `terraform apply`; rebuild the installer |
+| **Sonnet 4.6 as the default, everything else allowed by name (the shipped state)** | enable Sonnet 4.6 in Model Garden (step 1); run `terraform apply` after pulling this version |
+| Also run Opus 4.6 as the Opus pin | the recipe below |
+| Go back to Sonnet 5.5 as the default | `"default": "sonnet"`, `"pin": true` on `sonnet` and `"pin": false` on `sonnet-4-6`, swap their tiers; `terraform apply`; rebuild the installer |
+| Remove a model | set `"enabled": false` on its entry (not on the default); `terraform apply`; rebuild the installer |
 
 `pin: true` means the `sonnet`/`opus` aliases that Claude Code uses resolve to that model for every engineer; at most one entry per family
 may be pinned, an invalid catalog stops both Terraform and the installer before anything is written, and a family that has entries but no
 pin is flagged (the Models page, the installer and the API all warn: `/model sonnet` would use Claude Code's own version, which may not be allowed).
 
-**Recipe: Sonnet 4.6 (and Opus 4.6) as the default for everyone.** In `config/models.json`:
+**Recipe: also run Opus 4.6 as the Opus pin** (Sonnet 4.6 is already the default as shipped; to go back to Sonnet 5.5 apply the same steps the other way round: `"default": "sonnet"`, pin and tiers swapped). In `config/models.json`:
 
-1. `"default": "sonnet-4-6"`.
-2. `"pin": true` on `sonnet-4-6` and `opus-4-6`; `"pin": false` on `sonnet` and `opus`.
-3. Swap the `tier` values so the cards, descriptions and the `upgrade` step follow: `sonnet-4-6` gets `"default"` and `sonnet` gets `"previous"`;
-   `opus-4-6` gets `"upgrade"` and `opus` gets `"previous"`. Reword the `description` strings to match (they are shown to every engineer).
+1. `"default"` stays `"sonnet-4-6"`.
+2. `"pin": true` on `opus-4-6`; `"pin": false` on `opus`.
+3. Swap the `tier` values so the cards, descriptions and the `upgrade` step follow: `opus-4-6` gets `"upgrade"` and `opus` gets `"previous"`. Reword the `description` strings to match (they are shown to every engineer).
 4. `cp config/models.json client/models.json`, then `terraform apply` (the gateway policy now starts everyone on Sonnet 4.6 and the aliases follow the pins).
 5. **Rebuild and redistribute the installer:** `scripts/package-client.sh --gateway-url https://<gateway>`. A stamped installer carries its own copy of the
    catalog and ignores everything else, so an installer built before this change still has the old catalog: it does not know the 4.6 names for `model sonnet-4-6`
@@ -319,12 +319,12 @@ pin is flagged (the Models page, the installer and the API all warn: `/model son
 
 ### Step 3: what engineers do for Sonnet 4.6
 
-While 5.5 is the company default, a session starts on Sonnet 5.5. To use 4.6, switch on purpose:
+Sonnet 4.6 is the company default, so a session starts on it with no action. To use another model (for example Sonnet 5.5 or Opus 4.6), switch on purpose:
 
 ```bash
-claude --model claude-sonnet-4-6                 # start a session on 4.6 (any catalog id works)
-/model                                           # inside Claude Code: lists everything the catalog allows; pick Sonnet 4.6
-./claude-gateway-setup.sh model sonnet-4-6       # also writes it to my personal settings (alias or id; see the precedence note above)
+claude --model claude-opus-4-6                   # start a session on another model (any catalog id works)
+/model                                           # inside Claude Code: lists everything the catalog allows
+./claude-gateway-setup.sh model sonnet           # also writes it to my personal settings (alias or id; see the precedence note above)
 ```
 
 The installer's `upgrade` means the first catalog entry with tier `upgrade` (Opus 5.5 until the recipe's tier swap, then Opus 4.6); `model opus-4-6` and

@@ -23,16 +23,25 @@ const recipe = () => {
   }
   return c;
 };
+// The pre-4.6 shipped state: Sonnet 5.5 is the default and the Sonnet pin.
+const legacy = () => {
+  const c = shipped(); c.default = 'sonnet';
+  for (const m of c.models) {
+    if (m.alias === 'sonnet') { m.pin = true; m.tier = 'default'; }
+    if (m.alias === 'sonnet-4-6') { m.pin = false; m.tier = 'previous'; }
+  }
+  return c;
+};
 const edit = (fn) => { const c = shipped(); fn(c); return c; };
 const pins = (cat) => Object.fromEntries(cat.models.filter((m) => m.pinned).map((m) => [m.family, m.id]));
 
-test('the shipped catalog has Sonnet 4.6 and Opus 4.6 as "previous" entries that are allowed but not pinned', () => {
+test('the shipped catalog makes Sonnet 4.6 the default and Sonnet pin; Opus 4.6 is allowed but not pinned', () => {
   const cat = loadCatalog({});
-  assert.equal(cat.default, 'sonnet');
+  assert.equal(cat.default, 'sonnet-4-6');
   const s = cat.models.find((m) => m.alias === 'sonnet-4-6'), o = cat.models.find((m) => m.alias === 'opus-4-6');
-  assert.deepEqual([s.id, s.label, s.tier, s.family, s.enabled, s.pinned], ['claude-sonnet-4-6', 'Sonnet 4.6', 'previous', 'sonnet', true, false]);
+  assert.deepEqual([s.id, s.label, s.tier, s.family, s.enabled, s.pinned], ['claude-sonnet-4-6', 'Sonnet 4.6', 'default', 'sonnet', true, true]);
   assert.deepEqual([o.id, o.label, o.tier, o.family, o.enabled, o.pinned], ['claude-opus-4-6', 'Opus 4.6', 'previous', 'opus', true, false]);
-  assert.deepEqual(pins(cat), { sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5', haiku: 'claude-haiku-5-5' }, 'Defaults stay Sonnet 5.5 / Opus 5.5 / Haiku 5.5');
+  assert.deepEqual(pins(cat), { sonnet: 'claude-sonnet-4-6', opus: 'claude-opus-5-5', haiku: 'claude-haiku-5-5' }, 'Sonnet 4.6 / Opus 5.5 / Haiku 5.5');
   assert.deepEqual(s.pricePerMTok, { input: null, output: null, cacheRead: null, cacheWrite: null });
 });
 
@@ -66,7 +75,7 @@ test('a disabled entry that would pin by name does not collide with an explicit 
 });
 
 test('a custom alias can pin a family when it says which family', () => {
-  const cat = normalizeCatalog(edit((c) => { c.models.push({ alias: 'fast-sonnet', id: 'claude-sonnet-x', family: 'sonnet', pin: true }); c.models[0].pin = false; }));
+  const cat = normalizeCatalog(edit((c) => { c.models.push({ alias: 'fast-sonnet', id: 'claude-sonnet-x', family: 'sonnet', pin: true }); c.models[3].pin = false; }));
   assert.equal(pins(cat).sonnet, 'claude-sonnet-x');
   assert.throws(() => normalizeCatalog(edit((c) => { c.models.push({ alias: 'mystery', id: 'x-1', pin: true }); })), /pinned but has no family/);
   assert.equal(normalizeCatalog(edit((c) => { c.models.push({ alias: 'mystery', id: 'x-1' }); })).models.at(-1).pinned, false, 'no family and no pin: allowed, not pinned');
@@ -77,7 +86,7 @@ test('invalid catalogs are refused with a clear message', () => {
   bad((c) => { c.models[3].alias = 'sonnet'; }, /aliases must be unique/);
   bad((c) => { c.models[3].alias = 'SONNET'; }, /aliases must be unique/);
   bad((c) => { c.models[3].id = c.models[0].id; }, /ids must be unique/);
-  bad((c) => { c.models[3].pin = true; }, /more than one model pins the sonnet family \(sonnet, sonnet-4-6\)/);
+  bad((c) => { c.models[0].pin = true; }, /more than one model pins the sonnet family \(sonnet, sonnet-4-6\)/);
   bad((c) => { c.models[3].family = 'opus'; c.models[3].pin = true; c.models[4].pin = true; }, /pins the opus family/);
   bad((c) => { c.default = 'nope'; }, /"default" must be the alias or id/);
   bad((c) => { c.default = 'opus-4-6'; c.models[4].enabled = false; }, /must be enabled/);
@@ -88,11 +97,11 @@ test('invalid catalogs are refused with a clear message', () => {
   bad((c) => { c.models[3].enabled = 'no'; }, /"enabled" must be true or false/);
   bad((c) => { delete c.models[3].id; }, /needs an alias and an id|every model needs/);
   bad((c) => { c.models = []; }, /non-empty "models" list/);
-  bad((c) => { for (const m of c.models) m.enabled = false; delete c.default; }, /no enabled models/);
+  bad((c) => { for (const m of c.models) { m.enabled = false; m.pin = false; } delete c.default; }, /no enabled models/);
   assert.throws(() => loadCatalog({ MODELS_JSON: '{nope' }), /MODELS_JSON is not valid JSON/);
-  assert.throws(() => loadCatalog({ MODELS_JSON: JSON.stringify(edit((c) => { c.models[3].pin = true; })) }), /MODELS_JSON: more than one model pins/, 'the source is named');
+  assert.throws(() => loadCatalog({ MODELS_JSON: JSON.stringify(edit((c) => { c.models[0].pin = true; })) }), /MODELS_JSON: more than one model pins/, 'the source is named');
   // and the server refuses to start on it (a bad catalog never silently falls back to a different one)
-  assert.throws(() => loadConfig(testEnv({ MODELS_JSON: JSON.stringify(edit((c) => { c.models[3].pin = true; })) })), /pins the sonnet family/);
+  assert.throws(() => loadConfig(testEnv({ MODELS_JSON: JSON.stringify(edit((c) => { c.models[0].pin = true; })) })), /pins the sonnet family/);
 });
 
 test('"default": null or "" is refused like the installer and Terraform do; omitting the key still means the first enabled entry', () => {
@@ -138,13 +147,14 @@ async function demoModels(catalog) {
   return (await usage.company(W)).byModel.map((m) => m.model).sort();
 }
 
-test('demo traffic follows the pins: Sonnet 5.5 normally, 4.6 under the recipe', async () => {
-  assert.deepEqual(await demoModels(normalizeCatalog(shipped())), ['(none)', 'claude-haiku-5-5', 'claude-opus-5-5', 'claude-sonnet-5-5']);
+test('demo traffic follows the pins: Sonnet 4.6 as shipped, 5.5 under the legacy catalog, Opus 4.6 too under the recipe', async () => {
+  assert.deepEqual(await demoModels(normalizeCatalog(shipped())), ['(none)', 'claude-haiku-5-5', 'claude-opus-5-5', 'claude-sonnet-4-6']);
+  assert.deepEqual(await demoModels(normalizeCatalog(legacy())), ['(none)', 'claude-haiku-5-5', 'claude-opus-5-5', 'claude-sonnet-5-5']);
   assert.deepEqual(await demoModels(normalizeCatalog(recipe())), ['(none)', 'claude-haiku-5-5', 'claude-opus-4-6', 'claude-sonnet-4-6']);
 });
 
 test('GET /api/models lists the 4.6 entries with family, pinned and the default', async () => {
-  for (const [catalog, def, pinnedIds] of [[shipped(), 'sonnet', ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-5-5']], [recipe(), 'sonnet-4-6', ['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-haiku-5-5']]]) {
+  for (const [catalog, def, pinnedIds] of [[legacy(), 'sonnet', ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-5-5']], [shipped(), 'sonnet-4-6', ['claude-sonnet-4-6', 'claude-opus-5-5', 'claude-haiku-5-5']], [recipe(), 'sonnet-4-6', ['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-haiku-5-5']]]) {
     const clock = fakeClock();
     const cfg = { ...loadConfig(testEnv({ MODELS_JSON: JSON.stringify(catalog) })), usageSource: 'none' };
     const app = createApp(cfg, { now: clock.now, gateway: await seededGateway(clock), store: memStore(), usage: fakeUsage(), log: silent, lazyTickMs: 0, timerTickMs: 0, readCacheMs: 0, healthCacheMs: 0 });
@@ -159,7 +169,7 @@ test('GET /api/models lists the 4.6 entries with family, pinned and the default'
       assert.deepEqual(body.models.map((m) => m.alias), ['sonnet', 'opus', 'haiku', 'sonnet-4-6', 'opus-4-6']);
       assert.deepEqual(body.models.filter((m) => m.pinned).map((m) => m.id).sort(), [...pinnedIds].sort());
       const s46 = body.models.find((m) => m.alias === 'sonnet-4-6');
-      assert.equal(s46.tier, 'previous'); assert.equal(s46.family, 'sonnet'); assert.equal(s46.label, 'Sonnet 4.6');
+      assert.equal(s46.tier, def === 'sonnet' ? 'previous' : 'default'); assert.equal(s46.family, 'sonnet'); assert.equal(s46.label, 'Sonnet 4.6');
     } finally { await app.close(); }
   }
 });
@@ -168,7 +178,7 @@ test('warning (not an error) when an enabled family entry exists but nothing pin
   const none = normalizeCatalog(shipped()); assert.deepEqual(none.warnings, [], 'the shipped catalog and the full recipe pin every family');
   assert.deepEqual(normalizeCatalog(recipe()).warnings, []);
   // half-applied recipe: pin forgotten on the 4.6 entry after the 5.5 entry was un-pinned
-  const half = normalizeCatalog(edit((c) => { c.default = 'sonnet-4-6'; c.models.find((m) => m.alias === 'sonnet').pin = false; }));
+  const half = normalizeCatalog(edit((c) => { c.default = 'sonnet-4-6'; c.models.find((m) => m.alias === 'sonnet-4-6').pin = false; }));
   assert.equal(half.warnings.length, 1); assert.match(half.warnings[0], /No enabled model pins the sonnet family: sonnet, sonnet-4-6 are available by name/); assert.match(half.warnings[0], /"pin": true/);
   assert.equal(half.default, 'sonnet-4-6', 'still valid: a warning, not a refusal');
   assert.equal(normalizeCatalog(edit((c) => { for (const m of c.models) if (m.family === 'opus' || m.alias === 'opus') m.pin = false; })).warnings.length, 1);

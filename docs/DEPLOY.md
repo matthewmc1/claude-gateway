@@ -188,16 +188,14 @@ the Vertex model `id`, label/tier/description, `enabled`, and optional `pricePer
 Terraform turns it into the gateway policy (`availableModels`, every enabled model, default first, `enforceAvailableModels`, and `model` set explicitly to the default: Anthropic documents that `availableModels` alone does not change a gateway session's default), pins
 `ANTHROPIC_DEFAULT_{SONNET,OPUS,HAIKU}_MODEL` for every engineer, and passes the catalog to the budget app as `MODELS_JSON`.
 
-The catalog ships Sonnet 5.5, Opus 5.5 and Haiku 5.5 plus **Sonnet 4.6** (`claude-sonnet-4-6`) and **Opus 4.6** (`claude-opus-4-6`) with tier `previous`.
+The catalog ships **Sonnet 4.6** (`claude-sonnet-4-6`) as the default and Sonnet pin, with Sonnet 5.5, Opus 5.5, Haiku 5.5 and **Opus 4.6** (`claude-opus-4-6`) allowed by name (tier `previous` marks an entry that was replaced as the default, or is the older generation).
 Vertex model ids have no date suffix. Every enabled entry is allowed (people pick the 4.6 ones by name: `claude-gateway-setup.sh model sonnet-4-6`),
 but only an entry that *pins* its family sets `ANTHROPIC_DEFAULT_<FAMILY>_MODEL`. An entry has an optional `family` (`sonnet`, `opus`, `haiku`;
 default: its alias when that is one of them) and `pin` (default: true only when alias == family). At most one entry per family may pin.
 
-**Run 4.6 as the default for everyone:** set `"default": "sonnet-4-6"`, give `sonnet-4-6` and `opus-4-6` `"pin": true`, give `sonnet` and `opus` `"pin": false`,
-and swap their `tier` values and descriptions (4.6 takes `default`/`upgrade`, 5.5 becomes `previous`; `upgrade` follows the tier). Then `cp config/models.json client/models.json`,
+**Sonnet 4.6 is already the default.** To also run Opus 4.6 as the Opus pin, give `opus-4-6` `"pin": true` and `opus` `"pin": false`, and swap their `tier` values and descriptions (`opus-4-6` takes `upgrade`, `opus` becomes `previous`). To go back to Sonnet 5.5, set `"default": "sonnet"`, `"pin": true` on `sonnet`, `"pin": false` on `sonnet-4-6`, and swap their tiers. Then `cp config/models.json client/models.json`,
 `terraform apply`, **rebuild and redistribute the installer** with `scripts/package-client.sh` (a stamped installer carries its own catalog), and have engineers run the new
-installer's `update` (machine policy) and, for a personal model setting, `downgrade` or `reset`. The sonnet and opus pins then resolve to the 4.6 ids, the gateway policy
-starts everyone on Sonnet 4.6, and the 5.5 entries stay available by name. A family with entries but no pin is warned about (the Models page, the installer, `/api/models`).
+installer's `update` (machine policy) and, for a personal model setting, `downgrade` or `reset`. The pins then resolve to the ids you chose and the gateway policy starts everyone on the default; the other entries stay available by name. A family with entries but no pin is warned about (the Models page, the installer, `/api/models`).
 To go back, restore the edits. Full walkthrough: [INSTALL.md section 7](INSTALL.md#7-models-enable-sonnet-46-and-opus-46).
 
 **Region.** Claude 4.6 is served on Vertex AI from `global`, `us-east5`, `europe-west1` and `asia-southeast1`, **not** `europe-west2`. The default
