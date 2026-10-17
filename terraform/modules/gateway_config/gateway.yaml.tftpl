@@ -4,8 +4,11 @@ listen:
   host: 0.0.0.0
   port: 8080
   public_url: ${jsonencode(public_url)}
-  trusted_proxies: [169.254.0.0/16]
-
+  trusted_proxies: [${join(", ", trusted_proxies)}]
+%{ if length(allow_cidrs) > 0 }
+access_control:
+  allow_cidrs: [${join(", ", [for c in allow_cidrs : jsonencode(c)])}]
+%{ endif }
 oidc:
   issuer: ${jsonencode(oidc_issuer)}
   client_id: ${jsonencode(oidc_client_id)}
@@ -46,14 +49,17 @@ admin:
     - { id: budget-app-read, key: "$${GATEWAY_ADMIN_READ_KEY}" }
   blocked_message: ${jsonencode(blocked_message)}
 
-# Models come from config/models.json. The first availableModels entry is the default; the pins make the
-# sonnet/opus/haiku aliases resolve to exactly these ids for every engineer.
+# Models come from config/models.json. `model` states the starting model explicitly (the default entry, which is also
+# first in availableModels): per Anthropic's docs availableModels alone does not change the gateway-session default
+# (the Opus the opus alias resolves to). A managed `model` outranks a person's own `model` setting; /model and --model
+# still switch a session. The pins make the sonnet/opus/haiku aliases resolve to exactly these ids for every engineer.
 managed:
   policies:
     - match: {}
       code:
         enforceAvailableModels: true
         availableModels: ${jsonencode(available_models)}
+        model: ${jsonencode(try(available_models[0], ""))}
 %{ if length(env_pins) > 0 ~}
         env:
 %{ for k, v in env_pins ~}

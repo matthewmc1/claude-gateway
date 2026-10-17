@@ -86,8 +86,9 @@ test('primaryOverride prefers active, then soonest scheduled', () => {
   assert.equal(r.o, c); assert.equal(r.more, 2);
 });
 test('badgeText', () => {
-  assert.match(badgeText(mk('active', '2026-10-13T00:00:00Z', '2026-10-16T12:00:00Z', 5000)), /^Boost \+\$50 until \w{3}, Oct 1[56]$/);
-  assert.match(badgeText(mk('scheduled', '2026-10-19T12:00:00Z', '2026-10-26T12:00:00Z', 10000)), /^Boost \+\$100 from /);
+  const now = Date.parse('2026-10-14T12:00:00Z');   // pinned: the badge turns into "overdue" once an active boost's end has passed
+  assert.match(badgeText(mk('active', '2026-10-13T00:00:00Z', '2026-10-16T12:00:00Z', 5000), now), /^Boost \+\$50 until \w{3}, Oct 1[56]$/);
+  assert.match(badgeText(mk('scheduled', '2026-10-19T12:00:00Z', '2026-10-26T12:00:00Z', 10000), now), /^Boost \+\$100 from /);
 });
 import { findOverlap } from '../src/logic/overrides.ts';
 test('findOverlap only considers live boosts of the same period', () => {

@@ -48,11 +48,11 @@ Google Cloud project; nothing leaves it.
 | **On-call boosts that undo themselves** | Give someone +$75 for the incident week with a reason. The cap goes back on its own, and if someone edits it meanwhile, your boost steps aside instead of overwriting. |
 | **Accountability** | Each admin has their own account and gateway key, so the audit trail says *who* changed *which* cap, not "an admin". |
 | **Alerts, not surprises** | Email alerts for provider error bursts, spend-cap blocks, sign-in problems, gateway or database trouble. |
-| **Add models without a redeploy dance** | One file, `config/models.json`. The gateway policy, every engineer's model aliases and the app all follow. |
+| **Add models without a redeploy dance** | One file, `config/models.json` (Sonnet/Opus/Haiku 5.5 plus Sonnet 4.6 and Opus 4.6). The gateway policy, every engineer's model aliases and the app all follow; making 4.6 the default is a short recipe (pins, tiers, default; [INSTALL section 7](docs/INSTALL.md#7-models-enable-sonnet-46-and-opus-46)) plus a rebuilt installer. |
 
 ### For platform, security and finance
 
-* **Private by default.** Cloud Run services require Google IAM; no public endpoints; the database has no public IP.
+* **Private by default.** In the default (trial) topology both Cloud Run services require Google IAM and have no public endpoint; the database has no public IP. In the enterprise topology the **gateway** is private (internal load balancer, no public address; Cloud Run's invoker IAM check is deliberately off for it, so the network and ingress setting are its protection), while the **budget app is internet-reachable behind Google IAP** (sign-in, signed-token check, admin list, CSRF rules). See the [install guide](docs/INSTALL.md).
 * **Only your people sign in.** OIDC against your Google (or Okta/Entra) accounts, restricted to your email domains.
 * **Everything is code.** Terraform provisions it (one wizard, one file of settings); the engineer installer is a script you can read.
 * **You can audit it.** Zero runtime dependencies in the backend; the whole thing is MIT-licensed and small enough to read in an afternoon.
@@ -102,11 +102,13 @@ git clone https://github.com/matthewmc1/claude-gateway && cd claude-gateway
 ```bash
 cd terraform
 ./setup.sh --create-state-bucket   # wizard: project, admins, email domain, profile (trial|production), Google sign-in, private state bucket
-terraform init
+terraform init -upgrade            # provider 7.30+ (an old lock file pins 6.x)
 terraform apply -target=google_artifact_registry_repository.images -target=google_project_service.apis
 ../deploy/build-push.sh            # verifies and builds the gateway and app images, prints the app image tag
 terraform apply -var app_image_tag=<that tag>   # everything else (the database takes 10-15 minutes)
 ```
+
+**Gateway on a private network (no public address), budget app behind IAP?** Follow the [install guide](docs/INSTALL.md): IAP for the budget app, an internal load balancer for the gateway, and Sonnet 4.6 / Opus 4.6 setup.
 
 Terraform cannot create Google's sign-in (OAuth) client for you; `setup.sh` and `terraform output oidc_setup_steps`
 give the exact console steps and redirect URI. Details, costs and teardown: [docs/DEPLOY.md](docs/DEPLOY.md).
@@ -140,19 +142,20 @@ All measured from this repository, not estimated.
 
 | | |
 |---|---|
-| Automated checks that run without Docker | **1,233** (228 backend · 75 UI · 527 installer · 306 Terraform · 97 deploy) |
-| End-to-end tests against the real gateway binary | **85** (need Docker for a throwaway database: `scripts/e2e.sh`) |
+| Automated checks that run without Docker | **1,899** (311 backend · 87 UI · 857 installer · 545 Terraform, setup wizard included · 99 deploy) |
+| End-to-end tests against the real gateway binary | **100** `test(` calls counted statically in `tests/e2e/` (needs Docker for a throwaway database: `scripts/e2e.sh`; not part of the 1,899) |
 | Backend runtime dependencies | **0** (Node built-ins only) |
-| Product code | 2,828 lines backend · 2,993 UI · 1,254 installer · 2,744 Terraform · 393 deploy |
+| Product code | 3,247 lines backend · 3,158 UI · 1,384 installer · 3,787 Terraform · 422 deploy |
 | Time from clone to a running demo | **under a minute** after the first web build (server cold start 0.17 s) |
 | Demo data | 10 people, 11,550 requests over 30 days, answered in about 5 ms per page |
 | Engineer setup | **1 command**, no arguments, once the admin has packaged the installer |
-| Infrastructure | private Cloud Run x2, Cloud SQL, 8 secrets, 20 alert policies, 17 log metrics, 1 dashboard |
+| Infrastructure | private Cloud Run x2, Cloud SQL, 8 secrets, 20 alert policies, 17 log metrics, 1 dashboard (plan-time counts for the default trial topology; `app_access = "iap"` adds a tick job and its failed-execution alert, `internal_lb` adds one alert and one log metric) |
 | Money saved | not claimed: this is a visibility and control tool, and your savings depend on your usage |
+<!-- line counts: wc -l over api/**/*.mjs (no test/), app/App.tsx + app/index.ts + app/src/**/*.ts(x), client/claude-gateway-setup.{sh,ps1}, terraform/*.tf + terraform/modules/** (git-ignored local files such as zz_imports.tf excluded), deploy/{build-push.sh,proxy.sh,proxy.mjs,lib/*.sh,Dockerfile.app,Dockerfile.gateway}; tests, docs and generated files excluded -->
 
 ## Security model in brief
 
-* The app **only listens on loopback** locally and refuses to start otherwise. On Cloud Run it is private behind Google IAM.
+* The app **only listens on loopback** locally and refuses to start otherwise. On Cloud Run it is private behind Google IAM (trial topology) or public but behind Google IAP with a signed-token check (enterprise).
 * Data is **readable without a login by default** (that is the point: visibility). Set `APP_VIEW_ACCESS=admin` (Terraform: `view_access`) to require sign-in for reads too.
 * **Every write needs an admin**, uses that admin's own gateway key, and is rate-limited and logged.
 * Admin keys and passwords are server-side only and never sent to a browser. Terraform state holds them: use a private remote backend.
@@ -163,7 +166,8 @@ Read [SECURITY.md](SECURITY.md) for the full threat model and how to report a pr
 
 * **Spend is the gateway's list-price estimate**, a guardrail, not an invoice. Reconcile against your cloud bill.
 * **No token or prompt-cache analytics yet.** The gateway's own events carry no token counts; that needs client telemetry, which is not collected. The coach says so instead of guessing.
-* **The current Terraform has been validated and planned offline (225 checks) but not applied end to end** in an automated test: Cloud Run starting with the new sizing and probes, Cloud Scheduler's token being accepted, and the alert filters firing on real traffic are verified only by reading and by tests against the real gateway binary's log shapes. Do a `trial`-profile apply first.
+* **The current Terraform has been validated and planned offline (see the Terraform check count above) but not applied end to end** in an automated test: Cloud Run starting with the new sizing and probes, Cloud Scheduler's token being accepted, and the alert filters firing on real traffic are verified only by reading and by tests against the real gateway binary's log shapes. Do a `trial`-profile apply first.
+* **The enterprise topology (IAP for the budget app, internal load balancer for the gateway) has never been applied to a real project.** It is covered by offline plans, unit tests and a local emulator end to end test; what depends on Google's behaviour is listed in [INSTALL.md section 11](docs/INSTALL.md#11-what-is-verified-and-what-is-not). Claude Code's private-address check and certificate pinning against our certificates are likewise unverified.
 * **No real Claude reply has been observed through the Vertex path in this repository's tests**: the end-to-end suite uses a fake Vertex upstream for replies. Check Model Garden access and quota (`global_online_prediction_requests_per_base_model`) before rollout.
 * **Real sign-in end to end** (Claude Code through your identity provider) depends on your IdP and has not been exercised by this repository's automated tests.
 * **The Windows installer is untested** (no PowerShell in the build environment). macOS and Linux are tested.

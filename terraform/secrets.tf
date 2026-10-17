@@ -58,6 +58,8 @@ module "gateway_config" {
   admins                = [for a in local.admin_accounts : { email = a.email, key = a.writeKey }]
   system_key            = random_password.system_key.result
   store_max_connections = var.gateway_store_max_connections
+  trusted_proxies       = local.gateway_trusted_proxies
+  allow_cidrs           = local.gateway_allow_cidrs
 }
 
 locals {

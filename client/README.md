@@ -13,14 +13,14 @@ claude                                   # start Claude Code
 Then run `bash claude-gateway-setup.sh status` any time to check the machine end to end.
 Want to see what it will do first? `bash claude-gateway-setup.sh install --dry-run` prints exactly what would be written and changes nothing.
 
-Needs Claude Code 2.1.285 or later (`claude update`) and `python3` (already on macOS and most Linux). On an older Claude Code, or one whose `claude --version` cannot be read, `install` stops with an error and changes nothing, because the provider lock would silently not work there. Run `claude update` and try again. Only `--force-old-claude` overrides this (with a loud warning that the lock is ineffective); `--yes` does not. If Claude Code is not installed at all, install continues and the settings apply once it is.
+Needs Claude Code 2.1.285 or later (`claude update`), `python3` (already on macOS and most Linux) and `sudo` (the system policy is root-owned). On an older Claude Code, or one whose `claude --version` cannot be read, `install` stops with an error and changes nothing, because the provider lock would silently not work there. Run `claude update` and try again. Only `--force-old-claude` overrides this (with a loud warning that the lock is ineffective); `--yes` does not. If Claude Code is not installed at all, install continues and the settings apply once it is.
 
 ## What you get
 
 | Layer | Where | What | Who can change it |
 |---|---|---|---|
 | System policy | `/Library/Application Support/ClaudeCode/managed-settings.json` (macOS), `/etc/claude-code/managed-settings.json` (Linux) | Sign in through the company gateway only, the gateway address, no direct Anthropic / Vertex / Bedrock / API-key access, only the approved models, and the model aliases pinned to them | admins |
-| Your defaults | `~/.claude/settings.json` | The company default model (Sonnet 5.5) and effort (medium), plus any starter settings your admin chose | you |
+| Your defaults | `~/.claude/settings.json` | The company default model (the catalog's `default`, Sonnet 5.5 as shipped) and effort (medium), plus any starter settings your admin chose | you |
 
 Authentication is the gateway's single sign-on (your company identity provider). No API keys or cloud credentials live on your laptop.
 Install only fills in what you have not set yourself: a model you chose earlier (if it is still approved) and your own settings are kept, and unrelated settings are never removed.
@@ -29,18 +29,22 @@ Install only fills in what you have not set yourself: a model you chose earlier 
 
 ```bash
 bash claude-gateway-setup.sh status            # check this machine; also tells you if the policy is out of date
-bash claude-gateway-setup.sh upgrade           # explicit step up to the premium model (Opus 5.5): costs more, uses budget faster
+bash claude-gateway-setup.sh upgrade           # explicit step up to the catalog's "upgrade" model (Opus 5.5 unless your admin changed it): costs more, uses budget faster
 bash claude-gateway-setup.sh downgrade         # back to the company default model
-bash claude-gateway-setup.sh model haiku       # pick a model by name (sonnet, opus, haiku) or by full id from the approved list
+bash claude-gateway-setup.sh model haiku       # pick a model by name (sonnet, opus, haiku, sonnet-4-6, opus-4-6) or by full id from the approved list
 bash claude-gateway-setup.sh effort high       # thinking effort: low | medium | high | xhigh
 bash claude-gateway-setup.sh reset             # back to the company default model and effort
-bash claude-gateway-setup.sh update            # refresh the system policy after your admin changes the approved models
+bash claude-gateway-setup.sh update            # refresh the system policy after your admin gives you a NEW installer with changed approved models
 bash claude-gateway-setup.sh uninstall         # remove what install added
 ```
 
 Inside a session the same choices are `/model opus` and `/effort high`, for that session only.
+
+**What `model`, `upgrade`, `downgrade` and `reset` change.** They edit your own `~/.claude/settings.json`. If your company's gateway policy sets a starting model (the repo's Terraform does, to the catalog default), Claude Code gives managed settings priority over your own file, so each launch starts on the company model and you move inside a session with `/model` or `claude --model <id>`. Your setting still applies wherever the policy sets no model. `status` shows both.
+
+**Claude 4.6.** Sonnet 4.6 and Opus 4.6 are approved but are not what `sonnet`/`opus` mean unless your admin moved the default. To use one yourself: `bash claude-gateway-setup.sh model sonnet-4-6` (or `opus-4-6`), or set it up in one step with `bash claude-gateway-setup.sh install --model sonnet-4-6`. It is saved as your own default model in `~/.claude/settings.json` (and `/model claude-sonnet-4-6` does it for one session); `downgrade` or `reset` goes back to the company default. These commands need an installer built **after** your admin added the model: an older installer says "unknown model".
 Add `--dry-run` to any command to preview it. `--no-user-settings` makes `install` touch only the system policy; `--yes` skips questions.
-`install` reads and checks both settings files before it writes anything. If `managed-settings.json` or `~/.claude/settings.json` is not valid JSON (a `//` comment, a stray comma) it stops with an explicit message, exits non-zero, and leaves the file exactly as it was. Fix or move the file and run it again.
+`--model` needs a value (`--model ""` is an error, not "unset"). `install` reads and checks both settings files before it writes anything. If `managed-settings.json` or `~/.claude/settings.json` is not valid JSON (a `//` comment, a stray comma) it stops with an explicit message, exits non-zero, and leaves the file exactly as it was. Fix or move the file and run it again.
 If `~/.claude/settings.json` is a symlink (dotfiles repos), the link is kept and the real file it points to is updated.
 
 ### If the gateway is gone (recovery)
@@ -53,14 +57,14 @@ sudo bash claude-gateway-setup.sh uninstall          # removes only what the ins
 sudo bash claude-gateway-setup.sh uninstall --force  # also removes values that were changed since install
 ```
 
-then `/logout` inside Claude Code. `status` prints the same hint whenever the installed policy points at a gateway it cannot reach. `uninstall` only removes values that still equal what the installer wrote; anything an admin changed since is left alone, and it tells you which keys and how to remove them (`--force`).
+then `/logout` inside Claude Code. `status` prints the same hint whenever the installed policy points at a gateway it cannot reach. `uninstall` only removes values that still equal what THIS installer would write; anything else (changed by an admin, or written by a different installer version or model catalog, which is the normal state during a recovery) is left alone, and it tells you which keys, whether the sign-in lock is still in place (`STILL LOCKED`) and how to remove them (`--force`).
 
 ## Troubleshooting
 
 | You see | What it means and what to do |
 |---|---|
 | `Not signed in` in Claude Code, or `/status` shows another login | Run `/logout`, then `/login`, press Enter on **Cloud gateway**, and sign in with your work account. If you are off the network, connect the VPN first: `status` says "cannot reach ... /readyz" when the gateway is not reachable. |
-| `... resolves to a public address. Claude Code refuses to sign in to those` | Claude Code only signs in to loopback or private (internal) gateway addresses. Ask your admin for the gateway's private address and re-run `install --gateway-url https://<private-address>`. |
+| `... resolves to a public address. Claude Code refuses to sign in to those` | Claude Code only signs in to gateways whose address is loopback, RFC 1918 private, link-local, CGNAT (`100.64.0.0/10`) or IPv6 ULA (documentation ranges such as `203.0.113.0/24` count as public). Ask your admin for the gateway's private address and re-run `install --gateway-url https://<private-address>`. Admins whose internal network uses public address space you own: declare it in `gatewayInternalNetworks` (below). |
 | `Claude Code X is older than 2.1.285` | Run `claude update`, then run `install`/`status` again. The provider lock needs 2.1.285 or later; `install` refuses to run on an older one unless you pass `--force-old-claude` (`--yes` does not override). |
 | `userSettings key '...' is not allowed` | Admin: your `defaults.json` asks the installer to put a setting into every engineer's `~/.claude/settings.json` that is not on the allow-list (see below). |
 | `ignoring .../defaults.json` / `OVERRIDE:` notices | Your admin's installer has its settings built in and deliberately ignores a `defaults.json`/`models.json` next to it and the `CLAUDE_GATEWAY_URL`/`CLAUDE_GATEWAY_MODELS` variables. If you were told to test with local files, add `--dev`. |
@@ -68,8 +72,10 @@ then `/logout` inside Claude Code. `status` prints the same hint whenever the in
 | `cannot reach ... /readyz` and you are locked out for good | See "If the gateway is gone (recovery)" above. |
 | `ANTHROPIC_API_KEY` (or `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_VERTEX`, ...) warning | A leftover key or direct-access setting. The policy blocks it, but remove it from your shell profile (`~/.zshrc`, `~/.bashrc`) or from `~/.claude/settings.json` so it cannot confuse you. The installer never prints the value and never deletes your settings for you. |
 | `no gateway address is known for this installer` | You are running the plain repo script, not your admin's installer. Ask your admin for it, or run `install --gateway-url https://<gateway>`. |
-| `status` says `policy is out of date with the model catalog` | The approved models changed. Run `update`. |
+| `status` says `policy is out of date with the model catalog` | The approved models changed. Get your admin's **current** installer (the old file keeps the old catalog and would report "already matches") and run `update`. |
 | `your default model '...' is not in the company catalog` | That model was removed. Run `reset`. |
+| `no model pins the sonnet family (...)` | Admin: the catalog has entries for that family but none has `"pin": true`, so `/model sonnet` would use Claude Code's own version, which may not be allowed. Pin one entry. |
+| `unknown model 'sonnet-4-6'` | The installer is older than the catalog. Ask your admin for the current installer. |
 | `needs administrator rights` | `install` writes the system policy, which needs `sudo`. Run it from an account that has it, or ask your admin to push the policy (see below). |
 | `TEST GUARD` | Only seen by the test suite. Ignore. |
 
@@ -121,14 +127,15 @@ That order is for the plain repo script and for stamped installers run with `--d
 | Key | Meaning |
 |---|---|
 | `gatewayUrl` | Optional here; usually left empty and stamped by `package-client.sh` |
-| `model` | Default model, an alias or id from the catalog (falls back to the catalog's `default`) |
+| `model` | Optional. Default model, an alias or id from the catalog. Leave it out and the catalog's `default` decides (so switching everyone to another model is one edit in `config/models.json`). |
+| `gatewayInternalNetworks` | Optional. IPv4 blocks (`["198.51.101.0/24"]`) written into the system policy for gateways on public address space your organisation owns. Claude Code honours the key only from a managed source on the machine (the system policy file, MDM or registry), never from the gateway's own policy or user settings. Validated like Claude Code does (at most 4 blocks, first address plus `/8`..`/32`, no overlap, nothing overlapping private, documentation, reserved or multicast space; a bad list would block every gateway sign-in), and refused by `install`, `package-client.sh` and `--defaults` otherwise. Needs Claude Code 2.1.268+. Keep `access_control.allow_cidrs` on the gateway at the same blocks. |
 | `effortLevel` | `low`, `medium`, `high` or `xhigh` |
 | `userSettings` | Extra user-level settings, **allow-listed harmless keys only** (see "Trust model"); merged into each engineer's `~/.claude/settings.json` only where they have not set the key. Other keys make the build and `install` fail. |
 
 ### What the system policy contains
 
-`forceLoginMethod: gateway`, `forceLoginGatewayUrl`, `parentSettingsBehavior: merge`, `allowedProviders: ["gateway"]`, and, generated from the catalog,
-`availableModels` (default model first), `enforceAvailableModels: true` and the `ANTHROPIC_DEFAULT_{SONNET,OPUS,HAIKU}_MODEL` pins. Other keys already in the file are preserved, a changed file is backed up next to it (`managed-settings.json.bak.<time>.<random>`, mode 600, newest 5 kept), and re-running is idempotent. The policy directory is created `0755` and the file `0644` whatever the umask, so the engineer's Claude Code can always read it.
+`forceLoginMethod: gateway`, `forceLoginGatewayUrl`, `parentSettingsBehavior: merge`, `allowedProviders: ["gateway"]`, `gatewayInternalNetworks` (only when `defaults.json` declares it; a key your MDM delivered is left alone and still counts for the address check) and, generated from the catalog,
+`availableModels` (default model first, then every other enabled model), `enforceAvailableModels: true` and the `ANTHROPIC_DEFAULT_{SONNET,OPUS,HAIKU}_MODEL` pins (only for catalog entries that pin their family: see below). Other keys already in the file are preserved, a changed file is backed up next to it (`managed-settings.json.bak.<time>.<random>`, mode 600, newest 5 kept), and re-running is idempotent. The policy directory is created `0755` and the file `0644` whatever the umask, so the engineer's Claude Code can always read it.
 
 ### Push the policy with MDM instead
 
@@ -144,8 +151,15 @@ Re-run `package-client.sh` with the new URL and host the new files (re-publish t
 
 ### Adding or retiring a model
 
-Edit `config/models.json` (add an entry, or set `"enabled": false`), then `cp config/models.json client/models.json` and re-run `package-client.sh`.
-Engineers get it with `update` (or a fresh `install`); `model <alias>` works for the new entry right away, and `status` shows "out of date" until they update. The tier `upgrade` marks the model `upgrade` steps up to; `default` is chosen by `defaults.json` `model`, else the catalog's `default`.
+Edit `config/models.json` (add an entry, or set `"enabled": false`), then `cp config/models.json client/models.json` (keep the two identical; the tests check it), **re-run `package-client.sh` and redistribute the new installer**, and `terraform apply` for the gateway policy. A stamped installer carries its own copy of the catalog: an engineer holding the old file cannot use the new model name (`unknown model`), and its `update` is a no-op.
+Engineers get the new catalog by running the **new** installer's `update` (or a fresh `install`); `status` shows "out of date" until they do.
+Names: an alias is letters, digits, `.`, `_`, `-` (1-64 characters); an id may also contain `@`, `:` and `/` up to 128 characters, so Vertex forms such as `claude-sonnet-4-5@20250929` work. Both are only ever written through a JSON encoder, never into a shell or PowerShell command line; anything else (spaces, quotes, `$`, backticks, control characters) is refused. A `default` of `null` or `""` is refused here, by the API and by Terraform alike. The tier `upgrade` marks the model `upgrade` steps up to; `default` is chosen by `defaults.json` `model` if you set one, else the catalog's `default`.
+
+**Family and pin.** Claude Code's `sonnet`, `opus` and `haiku` aliases are pinned by the policy to one catalog entry each. An entry has an optional `family` (`sonnet`, `opus` or `haiku`; it defaults to the alias when that is one of them) and an optional `pin` (defaults to true only when alias == family). Every enabled entry is allowed; only a pinned entry sets `ANTHROPIC_DEFAULT_<FAMILY>_MODEL`. So `sonnet-4-6` (family `sonnet`, not pinned) is allowed and chosen by name, while the pin stays on Sonnet 5.5. The installer refuses a catalog with repeated aliases or ids, two pinned entries in one family, a pinned entry that is disabled or has no family, or a `default` that is missing or disabled, and then changes nothing (so a bad catalog never loosens or removes the lock).
+
+**A family with entries but no pin** (for example only `sonnet` with `"pin": false`) is legal but warned about by `install`, `update`, `status` and `print-managed`: `/model sonnet` would use Claude Code's own version for the alias, which may not be on the allowed list (HTTP 400).
+
+**Run 4.6 as the default for everyone.** In `config/models.json` set `"default": "sonnet-4-6"`, give `sonnet-4-6` and `opus-4-6` `"pin": true` and `sonnet` and `opus` `"pin": false`, swap their `tier` values (4.6 takes `default`/`upgrade`, the 5.5 entries become `previous`, so the app's cards and `upgrade` follow) and reword the `description` strings, copy the file to `client/models.json`, `terraform apply`, rebuild with `package-client.sh` and redistribute. The gateway policy then starts everyone on Sonnet 4.6. On engineers' machines: the new installer's `update` refreshes the machine policy (list and pins); `downgrade` moves a personal model setting to the company default (`reset` also resets effort). The 5.5 entries stay available by name. Leave `model` out of `defaults.json`, since a `model` there overrides the catalog default.
 
 ### Windows (UNTESTED)
 
@@ -154,7 +168,7 @@ Engineers get it with `update` (or a fresh `install`); `model <alias>` works for
 ### Tests
 
 ```bash
-client/test/run.sh        # plain bash + python3 (+ openssl for the signature tests); temp dirs and a fake gateway on 127.0.0.1:19380; exit code 0 = all passed
+client/test/run.sh        # plain bash + python3 (+ openssl for the signature tests); temp dirs and a fake gateway on 127.0.0.1:19350; exit code 0 = all passed
 ```
 
 The suite never touches the real system or user settings: every run is sandboxed with `CLAUDE_MANAGED_DIR`, `CLAUDE_USER_DIR` and a temp `HOME`, and the installer refuses to run outside the sandbox when `CLAUDE_GATEWAY_TEST_ROOT` is set.

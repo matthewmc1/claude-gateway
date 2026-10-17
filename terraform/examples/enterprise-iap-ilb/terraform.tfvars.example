@@ -1,0 +1,23 @@
+# Enterprise edge: budget app behind IAP on its run.app URL (no load balancer for the app), gateway behind a private
+# internal Application Load Balancer. Copy to ../../terraform.tfvars.
+project_id            = "my-gateway-project"
+profile               = "production"
+app_image_tag         = "20261013093000" # the tag deploy/build-push.sh prints
+admin_users           = [{ email = "platform-lead@example.com", name = "Platform Lead" }]
+allowed_email_domains = ["example.com"]
+oidc                  = { client_id = "123456789012-abcdef123456.apps.googleusercontent.com" } # or leave out until the client exists
+
+app_access   = "iap"
+app_viewers  = ["group:engineering@example.com"] # may open the app (read-only); admins always may
+# iap_allowed_domains = ["example.com"]          # optional extra check inside the app
+
+gateway_exposure = "internal_lb"
+gateway_hostname = "claude-gateway.corp.example.com" # you control this DNS name; public_url is derived from it
+# lb_subnet_cidr         = "10.0.1.0/24"
+# proxy_only_subnet_cidr = "10.0.2.0/23"
+# lb_ip                  = "10.0.1.10"
+# gateway_tls            = { mode = "self_signed" } # default, for trials (CA key lives in the state). Production: { mode = "provided", cert_pem = "..." } + gateway_tls_key_pem (sensitive, via TF_VAR_gateway_tls_key_pem)
+# gateway_allow_cidrs    = ["192.168.0.0/16"]        # your VPN/office ranges, only after checking client_ip in the gateway's audit events
+# gateway_internal_networks = []                    # only for the MDM text, if your LB address is outside RFC1918
+# analytics = "bigquery"                            # optional log sink + analyst view (separate dataset)
+# analytics_readers = ["group:analysts@example.com"]

@@ -3,6 +3,8 @@
 // Modes (first match wins):
 //   accounts  APP_ADMINS (or the demo admin when APP_DEMO=1): email + password, each admin has their own gateway write key.
 //   local     APP_ADMIN_PASSWORD + GATEWAY_ADMIN_WRITE_KEY: one shared password, the actor shows as `local-admin`.
+// APP_AUTH_MODE=iap replaces all of that: the only identity is the signed Google IAP JWT (see iap.mjs); an admin is an APP_ADMINS entry whose
+// email matches the verified one. There are no passwords, no sessions and no x-app-token in that mode: login/logout answer 410.
 // Nothing here ever returns or logs a password, key or the session secret.
 //
 // Sessions are stateless HMAC tokens carrying `iat`, `exp` and a per-account version. `revoke(email)` bumps that version, which
@@ -11,6 +13,7 @@
 import crypto from 'node:crypto';
 import { HttpError } from './http.mjs';
 import { DEMO_ADMIN } from './demo-users.mjs';
+import { createIapVerifier } from './iap.mjs';
 
 const SESSION_MS = 12 * 3600e3;
 // Login throttling. After `free` failures a key is locked for BASE_MS, doubling with each further failure up to MAX_MS.
@@ -53,6 +56,9 @@ export function createAuth(cfg, { now = () => Date.now(), log = (o) => console.l
     ? cfg.admins
     : cfg.demo ? [{ email: DEMO_ADMIN.email, name: DEMO_ADMIN.name, password: DEMO_ADMIN.password, writeKey: cfg.writeKey || 'demo-key' }] : [];
   const accountsMode = accounts.length > 0;
+  const iapMode = cfg.authMode === 'iap';
+  const verifier = iapMode ? createIapVerifier(cfg, { now, log, fetch: fetchImpl }) : null;
+  const identities = new WeakMap();               // request -> verified IAP identity | null, filled by identify() before routing
   const localMode = !accountsMode && !!cfg.localPassword;
   const dummy = crypto.randomBytes(16).toString('hex');   // compared against when the email is unknown, so timing is the same
   const byIp = createThrottle(IP_FREE, now), byAccount = createThrottle(ACCOUNT_FREE, now), byGhost = createThrottle(ACCOUNT_FREE, now);
@@ -70,6 +76,7 @@ export function createAuth(cfg, { now = () => Date.now(), log = (o) => console.l
     return p + '.' + sign(p);
   }
   function verify(token) {
+    if (iapMode) return null;                       // app sessions do not exist in iap mode
     const parts = String(token || '').split('.');
     if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
     const good = Buffer.from(sign(parts[0])), got = Buffer.from(parts[1]);
@@ -100,7 +107,9 @@ export function createAuth(cfg, { now = () => Date.now(), log = (o) => console.l
     return b.split('.').length === 2 ? b : '';       // a Google ID token has three parts: never a session
   };
 
+  const GONE = () => new HttpError(410, 'password sign-in is turned off: this deployment uses your company sign-in (IAP)');
   function login(body, { ip = 'unknown' } = {}) {
+    if (iapMode) throw GONE();
     const password = typeof body?.password === 'string' ? body.password : '';
     const email = accountsMode ? (typeof body?.email === 'string' ? body.email.trim().toLowerCase().slice(0, 200) : '') : 'local-admin';
     const acct = accountsMode ? accounts.find((x) => x.email === email) : null;
@@ -139,14 +148,32 @@ export function createAuth(cfg, { now = () => Date.now(), log = (o) => console.l
     return { token: mint(who.email, who.name), email: who.email, name: who.name, delayMs: slow };
   }
 
-  const optionalAdmin = (req) => adminFor(verify(sessionToken(req)));
+  // iap mode: resolve who is calling, once per request, before routing. Null = no valid signed IAP JWT. Throws 503 only if the keys are unavailable.
+  async function identify(req) {
+    if (!iapMode) return null;
+    if (identities.has(req)) return identities.get(req);
+    const id = await verifier.identify(req);
+    identities.set(req, id);
+    return id;
+  }
+  const identityOf = (req) => (iapMode ? identities.get(req) || null : null);
+  const iapAdmin = (id) => { const a = id && accounts.find((x) => x.email === id.email); return a ? { email: a.email, name: a.name, writeKey: a.writeKey } : null; };
+  const optionalAdmin = (req) => (iapMode ? iapAdmin(identityOf(req)) : adminFor(verify(sessionToken(req))));
   function requireAdmin(req) {
     const a = optionalAdmin(req);
-    if (!a) throw new HttpError(401, 'sign in required');
-    return a;
+    if (a) return a;
+    if (iapMode && identityOf(req)) throw new HttpError(403, 'only admins can do this');        // signed in through IAP, but not on the admin list
+    throw new HttpError(401, 'sign in required');
+  }
+  // The caller as the UI shows them: who they are and whether they are an admin. Null when nobody is identified.
+  function whoami(req) {
+    if (iapMode) { const id = identityOf(req); if (!id) return null; const a = iapAdmin(id); return { email: id.email, name: a?.name || id.email.split('@')[0], admin: !!a }; }
+    const a = optionalAdmin(req);
+    return a ? { email: a.email, name: a.name, admin: true } : null;
   }
   // Ends the caller's session and every other session of the same account.
   function logout(req) {
+    if (iapMode) throw GONE();
     const a = requireAdmin(req);
     revoke(a.email);
     log({ evt: 'admin.logout', email: a.email });
@@ -175,7 +202,7 @@ export function createAuth(cfg, { now = () => Date.now(), log = (o) => console.l
     return jwks.keys.find((k) => k.kid === kid && k.kty === 'RSA' && (!k.alg || k.alg === 'RS256') && (!k.use || k.use === 'sig')) || null;
   }
   async function schedulerClaims(req) {
-    if (!cfg.inCloud || !cfg.schedulerSa || !cfg.schedulerAudience) return null;     // fail closed: nothing configured, nothing accepted
+    if (iapMode || !cfg.inCloud || !cfg.schedulerSa || !cfg.schedulerAudience) return null;     // fail closed: nothing configured, nothing accepted
     const token = bearer(req);
     if (!token || token.length > MAX_BEARER) return null;
     const parts = token.split('.');
@@ -200,6 +227,7 @@ export function createAuth(cfg, { now = () => Date.now(), log = (o) => console.l
   }
   // POST /api/internal/tick: an admin session or the scheduler. Returns who was accepted, or throws 401.
   async function requireScheduler(req) {
+    if (iapMode) return { via: 'admin', email: requireAdmin(req).email };       // IAP blocks the scheduler's own token: the Cloud Run job ticks
     const a = optionalAdmin(req);
     if (a) return { via: 'admin', email: a.email };
     const c = await schedulerClaims(req);
@@ -207,5 +235,5 @@ export function createAuth(cfg, { now = () => Date.now(), log = (o) => console.l
     throw new HttpError(401, 'sign in required');
   }
 
-  return { login, logout, revoke, requireAdmin, optionalAdmin, requireScheduler, accounts: accountsMode, mint, verify, throttleSizes: () => ({ ip: byIp.size, account: byAccount.size, ghost: byGhost.size }) };
+  return { login, logout, revoke, requireAdmin, optionalAdmin, requireScheduler, identify, whoami, mode: iapMode ? 'iap' : 'session', accounts: accountsMode, mint, verify, throttleSizes: () => ({ ip: byIp.size, account: byAccount.size, ghost: byGhost.size }) };
 }

@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { E } from './lib/env.mjs';
-import { ROOT, modelPolicy } from './lib/config.mjs';
+import { ROOT, modelPolicy, readCatalog, recipe46 } from './lib/config.mjs';
 import { messages, mintSession, unique, wget } from './lib/gw.mjs';
 
 const SCRIPT = path.join(ROOT, 'client', 'claude-gateway-setup.sh');
@@ -67,6 +67,12 @@ describe('L4 install against the real gateway', () => {
     const cat = modelPolicy();
     assert.deepEqual(p.availableModels, cat.availableModels, 'and both equal config/models.json (default first)');
     assert.deepEqual(p.env, cat.env);
+    // the gateway states the starting model explicitly (Anthropic: availableModels alone leaves the gateway-session default on the Opus alias)
+    assert.equal(g.model, cat.model, 'the gateway pushes model = the catalog default (first availableModels entry)');
+    assert.equal(g.model, cat.availableModels[0]);
+    // Claude 4.6 is allowed by name but pins nothing, so the alias pins stay on 5.5 (the catalog's default entries)
+    for (const id of ['claude-sonnet-4-6', 'claude-opus-4-6']) assert.ok(p.availableModels.includes(id), id + ' is allowed');
+    assert.ok(!Object.values(p.env).some((id) => id.endsWith('-4-6')), 'no 4.6 pin unless an admin runs the 4.6-default recipe');
     // anything the gateway pushes that the installer also writes must be identical; the rest must not collide
     for (const k of Object.keys(g)) if (k in p) assert.deepEqual(p[k], g[k], 'key ' + k);
     // client-side locks the installer adds on top
@@ -83,6 +89,38 @@ describe('L4 install against the real gateway', () => {
     const u = sb.userSettings();
     assert.equal(u.model, p.availableModels[0], 'the engineer default model is the gateway default (first entry)');
     assert.ok(p.availableModels.includes(u.model));
+  });
+
+  test('`model sonnet-4-6` and `install --model` choose a 4.6 model through the same user setting as every other model', () => {
+    const one = sandbox('model46');
+    assert.equal(one.run(['install', '--yes', '--gateway-url', E.gwUrl]).rc, 0);
+    const m = one.run(['model', 'sonnet-4-6']);
+    assert.equal(m.rc, 0, m.out);
+    assert.equal(one.userSettings().model, 'claude-sonnet-4-6');
+    assert.deepEqual(one.policy().env, modelPolicy().env, 'the managed pins are untouched by a personal choice');
+    const two = sandbox('model46b');
+    assert.equal(two.run(['install', '--yes', '--gateway-url', E.gwUrl, '--model', 'opus-4-6']).rc, 0);
+    assert.equal(two.userSettings().model, 'claude-opus-4-6');
+    assert.ok(two.policy().availableModels.includes(two.userSettings().model), 'what they chose is allowed by the policy');
+    assert.notEqual(two.run(['install', '--yes', '--gateway-url', E.gwUrl, '--model', 'gpt-4']).rc, 0, 'an unknown --model is refused');
+  });
+
+  test('the 4.6-default recipe: the installer renders exactly the policy the gateway config would carry for that catalog', () => {
+    const sb2 = sandbox('recipe46'), cat = recipe46(), file = path.join(sb2.root, 'models.json');
+    fs.writeFileSync(file, JSON.stringify(cat));
+    const want = modelPolicy(cat);
+    assert.equal(want.availableModels[0], 'claude-sonnet-4-6');
+    assert.equal(sb2.run(['install', '--yes', '--gateway-url', E.gwUrl, '--models', file]).rc, 0);
+    const p = sb2.policy();
+    assert.deepEqual(p.availableModels, want.availableModels); assert.deepEqual(p.env, want.env);
+    assert.equal(p.env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-4-6'); assert.equal(p.env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-4-6');
+    assert.equal(sb2.userSettings().model, 'claude-sonnet-4-6', 'a new engineer starts on the catalog default');
+    // an invalid catalog never installs anything (fail closed)
+    const bad = readCatalog(); bad.models.find((m) => m.alias === 'sonnet-4-6').pin = true;
+    const badFile = path.join(sb2.root, 'bad.json'); fs.writeFileSync(badFile, JSON.stringify(bad));
+    const sb3 = sandbox('badcat'); const r = sb3.run(['install', '--yes', '--gateway-url', E.gwUrl, '--models', badFile]);
+    assert.notEqual(r.rc, 0); assert.match(r.out, /more than one model pins the sonnet family/); assert.ok(!fs.existsSync(sb3.managed));
+    assert.throws(() => modelPolicy(bad), /more than one model pins the sonnet family/, 'the e2e config renderer refuses it too');
   });
 
   test('the gateway\'s managed-settings checksum follows the documented rule, and If-None-Match gives 304', async () => {

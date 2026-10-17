@@ -86,6 +86,18 @@ profile = "production"
 #   sql_connections = 40            # about 80% of your tier's max_connections
 # }
 
+# ============================== OPTIONAL: ENTERPRISE EDGE (IAP for the app, internal load balancer for the gateway) ================
+# Defaults keep the trial topology. Full examples: examples/enterprise-iap-ilb and examples/enterprise-iap-custom-domain.
+# Needs the Google provider 7.30+ (terraform init -upgrade). Console-only steps: terraform output edge_next_steps.
+# app_access        = "iap"                           # "iam" (default): private Cloud Run + proxy
+# app_viewers       = ["group:eng@example.com"]       # who may open the app besides the admins (read-only)
+# app_domain        = "claude-budget.example.com"     # custom domain: global load balancer + IAP (A record -> terraform output app_lb_ip)
+# gateway_exposure  = "internal_lb"                   # "run_app" (default): private Cloud Run + proxy
+# gateway_hostname  = "claude-gateway.corp.example.com"   # required with internal_lb; public_url is derived from it
+# gateway_tls       = { mode = "self_signed" }        # or { mode = "provided", cert_pem = "...", key_pem = "..." } (not in a committed file)
+# lb_subnet_cidr = "10.0.1.0/24"; proxy_only_subnet_cidr = "10.0.2.0/23"; lb_ip = "10.0.1.10"
+# analytics         = "bigquery"                      # + a log sink and dataset; analytics_view = true after the first request
+
 # ============================== IMAGES (set after deploy/build-push.sh) ===============================================
 # gateway_image_tag = "2.1.296"                  # the pinned Claude Code release
 app_image_tag = "20260101120000"                 # REQUIRED for a full apply: the tag build-push.sh prints (8+ digit timestamp, 7-40 hex git sha, or semver-with-build-suffix; never latest/main/dev)

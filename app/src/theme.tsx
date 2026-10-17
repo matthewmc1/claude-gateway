@@ -54,7 +54,7 @@ export const num = { fontVariant: ['tabular-nums'] } as any;
 export const pointer = { cursor: 'pointer' } as any;
 
 // Models keep one colour for life (colour follows the entity, never its rank).
-const FIXED: Record<string, number> = { 'claude-opus-5-5': 0, 'claude-opus-4-8': 0, 'claude-sonnet-5-5': 1, 'claude-sonnet-4-6': 1, 'claude-haiku-4-5': 2, 'claude-haiku-5-5': 3 };
+const FIXED: Record<string, number> = { 'claude-opus-5-5': 0, 'claude-opus-4-8': 0, 'claude-sonnet-5-5': 1, 'claude-sonnet-4-6': 5, 'claude-opus-4-6': 4, 'claude-haiku-4-5': 2, 'claude-haiku-5-5': 3 };
 export function modelColor(t: Theme, model: string) {
   const key = Object.keys(FIXED).find((k) => model.startsWith(k));
   if (key !== undefined) return t.series[FIXED[key]];

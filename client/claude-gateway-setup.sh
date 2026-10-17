@@ -70,16 +70,27 @@ import json, os, sys, re, ipaddress, socket
 import urllib.parse as up
 
 EFFORTS = ("low", "medium", "high", "xhigh")
-PIN_ENV = (("sonnet", "ANTHROPIC_DEFAULT_SONNET_MODEL"), ("opus", "ANTHROPIC_DEFAULT_OPUS_MODEL"), ("haiku", "ANTHROPIC_DEFAULT_HAIKU_MODEL"))
+FAMILIES = ("sonnet", "opus", "haiku")       # the three aliases Claude Code understands; a catalog entry may pin one of them
+PIN_ENV = tuple((f, "ANTHROPIC_DEFAULT_%s_MODEL" % f.upper()) for f in FAMILIES)
 OWNED_TOP = ("forceLoginMethod", "forceLoginGatewayUrl", "parentSettingsBehavior", "allowedProviders", "availableModels", "enforceAvailableModels")
 BYPASS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN",
           "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_FOUNDRY")
 BUILTIN_CATALOG = {"default": "sonnet", "models": [
     {"alias": "sonnet", "id": "claude-sonnet-5-5", "label": "Sonnet 5.5", "tier": "default", "enabled": True},
     {"alias": "opus", "id": "claude-opus-5-5", "label": "Opus 5.5", "tier": "upgrade", "enabled": True},
-    {"alias": "haiku", "id": "claude-haiku-5-5", "label": "Haiku 5.5", "tier": "fast", "enabled": True}]}
-BUILTIN_DEFAULTS = {"gatewayUrl": "", "model": "sonnet", "effortLevel": "medium", "userSettings": {}}
-DEFAULTS_KEYS = ("gatewayUrl", "model", "effortLevel", "userSettings")
+    {"alias": "haiku", "id": "claude-haiku-5-5", "label": "Haiku 5.5", "tier": "fast", "enabled": True},
+    {"alias": "sonnet-4-6", "id": "claude-sonnet-4-6", "family": "sonnet", "label": "Sonnet 4.6", "tier": "previous", "enabled": True},
+    {"alias": "opus-4-6", "id": "claude-opus-4-6", "family": "opus", "label": "Opus 4.6", "tier": "previous", "enabled": True}]}
+BUILTIN_DEFAULTS = {"gatewayUrl": "", "model": "", "effortLevel": "medium", "userSettings": {}, "gatewayInternalNetworks": []}   # model "" = the catalog's default
+DEFAULTS_KEYS = ("gatewayUrl", "model", "effortLevel", "userSettings", "gatewayInternalNetworks")
+GIN = "gatewayInternalNetworks"
+# What Claude Code's /login accepts as a gateway address without any declaration (Anthropic's docs): RFC 1918, link-local,
+# CGNAT 100.64.0.0/10, IPv6 ULA fc00::/7 (and fe80::/10), or loopback. Everything else, TEST-NET and other documentation ranges
+# included, is "public" and refused unless it sits inside a block declared in the managed setting gatewayInternalNetworks.
+ACCEPTED_NETS = [ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "100.64.0.0/10", "fe80::/10", "fc00::/7")]
+# gatewayInternalNetworks may not overlap these (Claude Code refuses EVERY new gateway sign-in on the machine if it does).
+GIN_FORBIDDEN = [ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16", "100.64.0.0/10",
+                 "198.18.0.0/15", "192.0.0.0/24", "192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24", "0.0.0.0/8", "192.88.99.0/24", "224.0.0.0/4")]
 # The ONLY user-level settings an admin's defaults may add to ~/.claude/settings.json. Harmless UI/behaviour
 # preferences with plain scalar values. Anything that can run a command, redirect traffic or widen what
 # Claude may do (hooks, statusLine, apiKeyHelper, env, permissions, mcpServers, enabledPlugins, ...) is refused.
@@ -112,32 +123,72 @@ def load_file(path):
     if not isinstance(cur, dict): die("%s must hold a JSON object" % path)
     return cur
 
+# An alias is typed on a command line: letters, digits, '.', '_' and '-'. An id may also hold '@', ':' and '/' so the Vertex
+# forms (claude-sonnet-4-5@20250929, publishers/anthropic/models/...) work. Values only ever reach JSON through python's
+# encoder (never a shell or PowerShell string), and none of these characters is special there.
 NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
+ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@:/-]{0,127}\Z")
+
+def family_of(m):
+    """The family an entry belongs to: its explicit "family", else its alias when that is sonnet/opus/haiku, else None."""
+    f = m.get("family")
+    if f is None:
+        a = m["alias"].lower()
+        return a if a in FAMILIES else None
+    return f
+
+def pinned(m):
+    """True when the entry sets ANTHROPIC_DEFAULT_<FAMILY>_MODEL: an explicit "pin", else only when alias == family."""
+    if not m.get("enabled", True): return False
+    if "pin" in m: return m["pin"]
+    return family_of(m) == m["alias"].lower()
 
 def catalog():
     c = env_json("GW_CATALOG", "GW_CATALOG_SRC", BUILTIN_CATALOG)
     src = os.environ.get("GW_CATALOG_SRC", "model catalog")
-    if isinstance(c, dict) and "default" in c and not (isinstance(c["default"], str) and NAME_RE.match(c["default"])): die("%s: \"default\" must be a model alias or id" % src)
+    empty_default = isinstance(c, dict) and "default" in c and c["default"] in (None, "")
+    if isinstance(c, dict) and "default" in c and not empty_default and not (isinstance(c["default"], str) and (NAME_RE.match(c["default"]) or ID_RE.match(c["default"]))): die("%s: \"default\" must be a model alias or id" % src)
     ms = c.get("models") if isinstance(c, dict) else None
     if not isinstance(ms, list) or not ms: die("%s has no \"models\" list" % src)
-    out = []
+    out = []; aliases = {}; ids = {}
     for m in ms:
         if not isinstance(m, dict) or not m.get("alias") or not m.get("id"): die("%s: every model needs an alias and an id" % src)
-        for f in ("alias", "id"):
-            if not isinstance(m[f], str) or not NAME_RE.match(m[f]):
-                die("%s: model %s must be plain text of letters, digits, '.', '_' or '-' (1-64 characters, starting with a letter or digit)" % (src, f))
+        if not isinstance(m["alias"], str) or not NAME_RE.match(m["alias"]):
+            die("%s: model alias must be plain text of letters, digits, '.', '_' or '-' (1-64 characters, starting with a letter or digit)" % src)
+        if not isinstance(m["id"], str) or not ID_RE.match(m["id"]):
+            die("%s: model id must be plain text of letters, digits, '.', '_', '-', '@', ':' or '/' (1-128 characters, starting with a letter or digit)" % src)
         for f in ("label", "tier"):
             if f in m and not (isinstance(m[f], str) and len(m[f]) <= 80 and m[f].isprintable()): die("%s: model %s must be short plain text on one line" % (src, f))
         if "enabled" in m and not isinstance(m["enabled"], bool): die("%s: model enabled must be true or false" % src)
+        if "family" in m and m["family"] not in FAMILIES: die("%s: model %s: \"family\" must be one of %s" % (src, m["alias"], ", ".join(FAMILIES)))
+        if "pin" in m and not isinstance(m["pin"], bool): die("%s: model %s: \"pin\" must be true or false" % (src, m["alias"]))
+        if m["alias"].lower() in aliases: die("%s: model aliases must be unique (\"%s\" is used twice)" % (src, m["alias"]))
+        if m["id"] in ids: die("%s: model ids must be unique (\"%s\" is used twice)" % (src, m["id"]))
+        aliases[m["alias"].lower()] = m; ids[m["id"]] = m
+        if m.get("pin") is True:
+            if family_of(m) is None: die("%s: model %s is pinned but has no family; add \"family\": \"sonnet\", \"opus\" or \"haiku\"" % (src, m["alias"]))
+            if m.get("enabled", True) is False: die("%s: model %s is pinned but disabled; a pinned model must be enabled" % (src, m["alias"]))
         if m.get("enabled", True) is False: continue
         out.append(m)
     if not out: die("%s has no enabled models" % src)
+    byfam = {}
+    for m in out:
+        if pinned(m): byfam.setdefault(family_of(m), []).append(m["alias"])
+    for f, names in byfam.items():
+        if len(names) > 1:
+            die("%s: more than one model pins the %s family (%s). Only one may; set \"pin\": false on the others (to make a newer or older version the default, give it \"pin\": true and the current one \"pin\": false)." % (src, f, ", ".join(names)))
+    if empty_default: die("%s: \"default\" is empty. Name the alias or id of the default model, or leave the key out (the API and Terraform refuse null and \"\" too)." % src)
+    if isinstance(c, dict) and "default" in c:
+        d = c["default"]
+        hit = aliases.get(d.lower()) or ids.get(d)
+        if hit is None: die("%s: \"default\" must be the alias or id of a model in the list (got \"%s\")" % (src, d))
+        if hit.get("enabled", True) is False: die("%s: the default model \"%s\" must be enabled" % (src, d))
     return c, out
 
 BOOL_KEYS = ("verbose", "alwaysThinkingEnabled", "includeCoAuthoredBy", "spinnerTipsEnabled", "prefersReducedMotion")
 ENUM_KEYS = {"editorMode": ("normal", "vim")}
 TEXT_KEYS = {"theme": re.compile(r"[a-z][a-z0-9-]{0,31}\Z"), "outputStyle": re.compile(r"[A-Za-z][A-Za-z0-9 _-]{0,31}\Z"),
-             "model": NAME_RE}
+             "model": ID_RE}
 
 def check_user_settings(us, src):
     for k, v in us.items():
@@ -158,6 +209,24 @@ def check_user_settings(us, src):
         else:
             if not (isinstance(v, str) and TEXT_KEYS[k].match(v)): die("%s: userSettings.%s must be short plain text (letters, digits, '-')" % (src, k))
 
+def check_networks(v, src):
+    """gatewayInternalNetworks, validated with the rules Claude Code applies at /login: at most 4 IPv4 blocks written as first
+    address + prefix /8../32, no overlaps, nothing overlapping private or never-internal space. Returns the list."""
+    if not isinstance(v, list) or not all(isinstance(i, str) for i in v): die("%s: %s must be a list of IPv4 blocks such as [\"198.51.101.0/24\"]" % (src, GIN))
+    if len(v) > 4: die("%s: %s holds at most four blocks" % (src, GIN))
+    nets = []
+    for i in v:
+        if not re.fullmatch(r"[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}", i): die("%s: %s entry '%s' must be an IPv4 block written as its first address and a prefix, like 198.51.101.0/24" % (src, GIN, i[:40]))
+        if not 8 <= int(i.split("/")[1]) <= 32: die("%s: %s entry '%s' must have a prefix from /8 to /32" % (src, GIN, i))
+        try: n = ipaddress.IPv4Network(i, strict=True)
+        except ValueError: die("%s: %s entry '%s' is not a block (write its first address, like 198.51.101.0/24)" % (src, GIN, i))
+        bad = [str(f) for f in GIN_FORBIDDEN if n.overlaps(f)]
+        if bad: die("%s: %s entry '%s' overlaps %s, which Claude Code either already accepts (private space) or never accepts (documentation, reserved, VPN/NAT64 and multicast space); Claude Code would refuse every gateway sign-in" % (src, GIN, i, bad[0]))
+        for o in nets:
+            if n.overlaps(o): die("%s: %s entries '%s' and '%s' overlap; Claude Code refuses overlapping blocks" % (src, GIN, o, i))
+        nets.append(n)
+    return list(v)
+
 def defaults():
     raw = env_json("GW_DEFAULTS", "GW_DEFAULTS_SRC", {})
     src = os.environ.get("GW_DEFAULTS_SRC", "defaults")
@@ -170,6 +239,7 @@ def defaults():
     if not isinstance(d["userSettings"], dict): die("%s: userSettings must be an object" % src)
     check_user_settings(d["userSettings"], src)
     if not isinstance(d["gatewayUrl"], str): die("%s: gatewayUrl must be a string" % src)
+    d[GIN] = check_networks(d[GIN], src)
     return d
 
 def find_model(x):
@@ -196,11 +266,13 @@ def policy(url):
     _, ms = catalog(); dm = default_model()
     ids = [dm["id"]] + [m["id"] for m in ms if m["id"] != dm["id"]]
     env = {}
-    for alias, key in PIN_ENV:
+    for fam, key in PIN_ENV:
         for m in ms:
-            if m["alias"] == alias: env[key] = m["id"]
+            if pinned(m) and family_of(m) == fam: env[key] = m["id"]
     p = {"forceLoginMethod": "gateway", "forceLoginGatewayUrl": url, "parentSettingsBehavior": "merge",
          "allowedProviders": ["gateway"], "availableModels": ids, "enforceAvailableModels": True}
+    nets = defaults()[GIN]
+    if nets: p[GIN] = nets                           # only when the admin's defaults declare it; a key delivered by MDM is left alone
     if env: p["env"] = env
     return p
 
@@ -265,16 +337,45 @@ def normalize_url(u):
 def c_validate_url(u): normalize_url(u)
 def c_normalize_url(u): print(normalize_url(u))
 
-def c_host_kind(u):
-    h = up.urlparse(u).hostname
-    try: ip = ipaddress.ip_address(h)
+def _declared_networks(managed_path):
+    """Blocks declared in the admin's defaults plus any gatewayInternalNetworks already in the managed file (for example from MDM)."""
+    out = []
+    try: out += [ipaddress.ip_network(i) for i in defaults()[GIN]]
+    except Exception: pass
+    if managed_path and os.path.exists(managed_path):
+        try:
+            v = loads(open(managed_path).read()).get(GIN)
+            if isinstance(v, list): out += [ipaddress.ip_network(i) for i in v if isinstance(i, str)]
+        except Exception: pass
+    return out
+
+def addr_kind(ip, declared):
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped: ip = ip.ipv4_mapped
+    if ip.is_loopback: return "loopback"
+    if any(ip in n for n in ACCEPTED_NETS if n.version == ip.version): return "private"
+    if any(ip in n for n in declared if n.version == ip.version): return "declared"
+    return "public"
+
+def c_host_kind(u, managed_path=""):
+    h = up.urlparse(u).hostname; declared = _declared_networks(managed_path)
+    try: ips = [ipaddress.ip_address(h)]
     except ValueError:
         if os.environ.get("CLAUDE_GATEWAY_NO_DNS"): print("unchecked"); return
-        try: ip = ipaddress.ip_address(socket.gethostbyname(h))
+        try: ips = sorted({ipaddress.ip_address(a[4][0].split("%")[0]) for a in socket.getaddrinfo(h, None)}, key=str)
         except Exception: print("unresolved"); return
-    print("loopback" if ip.is_loopback else "private" if ip.is_private else "public")
+    kinds = {addr_kind(i, declared) for i in ips}            # Claude Code needs EVERY address the name resolves to to be acceptable
+    for k in ("public", "declared", "private", "loopback"):
+        if k in kinds: print(k); return
 
 def tsv(m): print("\t".join([m["id"], m.get("label") or m["alias"], m.get("tier") or ""]))
+
+def c_warnings():
+    """Catalog problems that are legal but probably not what the admin wants (one line each)."""
+    _, ms = catalog()
+    for f in FAMILIES:
+        mem = [m["alias"] for m in ms if family_of(m) == f]
+        if mem and not any(pinned(m) for m in ms if family_of(m) == f):
+            print("no model pins the %s family (%s): /model %s would use Claude Code's own %s version, which may not be on the allowed list (HTTP 400). Give one of them \"pin\": true in the model catalog." % (f, ", ".join(mem), f, f))
 
 def c_upgrade_model():
     _, ms = catalog()
@@ -293,12 +394,13 @@ def c_merge_managed(path, url):
     if cur.get("env") == {}: cur.pop("env")
     emit(cur)
 
-def c_user_install(path, no_user_settings):
+def c_user_install(path, no_user_settings, want_model=""):
     cur = load_file(path); d = defaults()
     if no_user_settings != "1":
         extra = {k: v for k, v in d["userSettings"].items() if k not in ("model", "effortLevel")}
         deep(cur, extra, True)
-    if not find_model(cur.get("model")): cur["model"] = default_model()["id"]
+    if want_model: cur["model"] = resolve(want_model)["id"]                  # install --model: an explicit choice wins over what was there
+    elif not find_model(cur.get("model")): cur["model"] = default_model()["id"]
     if cur.get("effortLevel") not in EFFORTS: cur["effortLevel"] = d["effortLevel"]
     emit(cur)
 
@@ -337,7 +439,7 @@ def c_status_user(path):
         f = find_model(m)
         if not f: print("bad:your default model '%s' is not in the company catalog, so the policy blocks it. Fix with: reset" % m)
         elif f["id"] == dm["id"]: print("ok:default model: %s (company default)" % f.get("label", f["id"]))
-        else: print("ok:default model: %s (your choice; company default is %s)" % (f.get("label", f["id"]), dm.get("label", dm["id"])))
+        else: print("ok:default model setting: %s (not the company default, %s; `downgrade` puts it back. A starting model set by the gateway policy outranks this file)" % (f.get("label", f["id"]), dm.get("label", dm["id"])))
     e = d.get("effortLevel")
     print(("ok:effort: " + e) if e else "warn:effort not set; Claude's default applies")
 
@@ -362,6 +464,9 @@ def _unmanage(path, force):
         if k not in d: continue
         if force or same[k](d[k]): d.pop(k)
         else: left.append(k)
+    if GIN in d and defaults()[GIN]:                                  # owned only when the admin's defaults declare it
+        if force or d[GIN] == defaults()[GIN]: d.pop(GIN)
+        else: left.append(GIN)
     env = d.get("env") if isinstance(d.get("env"), dict) else {}
     we = want.get("env", {})
     for _, k in PIN_ENV:
@@ -429,12 +534,13 @@ usage() {
 Claude Code gateway setup
 
   $SELF install            set everything up (admin defaults are built in; no arguments needed)
+  $SELF install --model <name|id>   same, and start on that model (e.g. sonnet-4-6) instead of the company default
   $SELF update             refresh the system policy from the model catalog
   $SELF status             check this machine end to end (also reports drift)
   $SELF upgrade            explicit step up to the catalog's upgrade model (e.g. Opus)
   $SELF downgrade          back to the company default model
   $SELF reset              back to the company default model and effort
-  $SELF model <name|id>    choose your default model (sonnet, opus, haiku, or a catalog id)
+  $SELF model <name|id>    choose your default model (sonnet, opus, haiku, sonnet-4-6, ... or any catalog id)
   $SELF effort <level>     thinking effort: low | medium | high | xhigh
   $SELF print-managed      print the system policy JSON (for Jamf / Intune / Group Policy)
   $SELF uninstall          remove what install added to the system policy (values an admin changed since are left alone)
@@ -444,6 +550,7 @@ Options:
   --gateway-url <url>      gateway origin; beats \$CLAUDE_GATEWAY_URL, defaults.json and the stamped value
   --defaults <file>        use this defaults file instead of defaults.json next to the script
   --models <file>          use this model catalog instead of models.json next to the script
+  --model <name|id>        install: start on this model (an alias or id from the catalog; same as running: model <name|id>)
   --dry-run                print exactly what would be written; change nothing
   --yes, -y                do not ask questions
   --no-user-settings       write the system policy only; leave ~/.claude/settings.json alone
@@ -455,7 +562,7 @@ EOF
 }
 
 # ---------- arguments ----------
-FLAG_URL=""; FLAG_DEFAULTS=""; FLAG_MODELS=""; DRY=0; YES=0; NO_USER=0; DEV=0; FORCE_OLD=0; FORCE=0; ARG1=""; ARG2=""; NPOS=0
+FLAG_URL=""; FLAG_DEFAULTS=""; FLAG_MODELS=""; FLAG_MODEL=""; DRY=0; YES=0; NO_USER=0; DEV=0; FORCE_OLD=0; FORCE=0; ARG1=""; ARG2=""; NPOS=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --gateway-url)      [ $# -ge 2 ] || die "--gateway-url needs a value"; FLAG_URL="$2"; shift 2;;
@@ -464,6 +571,8 @@ while [ $# -gt 0 ]; do
     --defaults=*)       FLAG_DEFAULTS="${1#*=}"; shift;;
     --models)           [ $# -ge 2 ] || die "--models needs a file"; FLAG_MODELS="$2"; shift 2;;
     --models=*)         FLAG_MODELS="${1#*=}"; shift;;
+    --model)            [ $# -ge 2 ] && [ -n "$2" ] || die "--model needs a model name or id"; FLAG_MODEL="$2"; shift 2;;
+    --model=*)          FLAG_MODEL="${1#*=}"; [ -n "$FLAG_MODEL" ] || die "--model needs a model name or id"; shift;;
     --dry-run)          DRY=1; shift;;
     --yes|-y)           YES=1; shift;;
     --no-user-settings) NO_USER=1; shift;;
@@ -477,6 +586,10 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$ARG1" ] || { usage; exit 1; }
+if [ -n "$FLAG_MODEL" ]; then
+  [ "$ARG1" = install ] || die "--model only applies to install (to change your model later: $SELF model <name|id>)"
+  [ "$NO_USER" != 1 ] || die "--model sets your user settings, so it cannot be combined with --no-user-settings"
+fi
 
 # ---------- sources: model catalog, defaults, gateway ----------
 # Trust model: a STAMPED installer (built by package-client.sh) ignores sibling files and environment overrides
@@ -492,7 +605,7 @@ if [ "$STAMPED" = 1 ] && [ "$DEV" != 1 ]; then
   [ -n "${CLAUDE_GATEWAY_URL:-}" ] && notice "ignoring the CLAUDE_GATEWAY_URL environment variable: this installer's gateway is built in (use --dev to override)."
   [ -n "${CLAUDE_GATEWAY_MODELS:-}" ] && notice "ignoring the CLAUDE_GATEWAY_MODELS environment variable: this installer's model catalog is built in (use --dev to override)."
 fi
-CATALOG_JSON=""; CATALOG_SRC="built-in table (claude-sonnet-5-5 / opus-5-5 / haiku-5-5)"; CATALOG_OVERRIDE=""
+CATALOG_JSON=""; CATALOG_SRC="built-in table (claude-sonnet-5-5 / opus-5-5 / haiku-5-5, sonnet-4-6 / opus-4-6)"; CATALOG_OVERRIDE=""
 DEFAULTS_JSON=""; DEFAULTS_SRC="built-in defaults"; DEFAULTS_OVERRIDE=""
 if [ -n "$FLAG_MODELS" ]; then [ -f "$FLAG_MODELS" ] || die "--models: no such file $FLAG_MODELS"; CATALOG_JSON="$(cat "$FLAG_MODELS")"; CATALOG_SRC="$FLAG_MODELS (--models)"; CATALOG_OVERRIDE=1
 elif [ "$USE_ENV" = 1 ] && [ -n "${CLAUDE_GATEWAY_MODELS:-}" ]; then [ -f "$CLAUDE_GATEWAY_MODELS" ] || die "CLAUDE_GATEWAY_MODELS: no such file $CLAUDE_GATEWAY_MODELS"; CATALOG_JSON="$(cat "$CLAUDE_GATEWAY_MODELS")"; CATALOG_SRC="$CLAUDE_GATEWAY_MODELS (CLAUDE_GATEWAY_MODELS)"; CATALOG_OVERRIDE=1
@@ -624,18 +737,21 @@ cmd_install() {
        Run: claude update   (then install again), or install anyway with: $SELF install --force-old-claude   (--yes does not override this)"
   else die "Claude Code $ver is older than $MIN_VERSION, so the provider lock would be silently ineffective on it. Nothing was changed.
        Run: claude update   (then install again), or install anyway with: $SELF install --force-old-claude   (--yes does not override this)"; fi
-  case "$(py host-kind "$GW_URL")" in
+  case "$(py host-kind "$GW_URL" "$MANAGED_FILE")" in
     loopback|private) ok "gateway address is loopback/private, which Claude Code accepts";;
-    public) warn "$GW_URL resolves to a public address. Claude Code refuses to sign in to those; use the gateway's private address.";;
+    declared) ok "gateway address is inside a gatewayInternalNetworks block (Claude Code also needs this machine to connect from inside the same block)";;
+    public) warn "$GW_URL resolves to a public address. Claude Code refuses to sign in to those (it accepts RFC 1918, link-local, CGNAT 100.64.0.0/10, IPv6 ULA and loopback). Use the gateway's private address, or, if your internal network is numbered from public space you own, declare it in the managed setting gatewayInternalNetworks (Claude Code 2.1.268+; see $SELF --help and the admin docs).";;
     unresolved) warn "could not resolve $GW_URL from here (VPN/proxy down?)";;
   esac
+  py warnings | while IFS= read -r _w; do warn "$_w"; done
   # Build BOTH results before writing anything: a bad input (invalid JSON in either settings file) must stop the whole
   # install, never be mistaken for "empty content", and never leave the machine half-configured.
   local sys_c usr_c=""
+  [ -z "$FLAG_MODEL" ] || py resolve "$FLAG_MODEL" >/dev/null || die "nothing was changed."
   sys_c="$(py merge-managed "$MANAGED_FILE" "$GW_URL")" || die "could not prepare the system policy (see above); nothing was changed."
   [ -n "$sys_c" ] || die "the system policy came out empty; nothing was changed."
   if [ "$NO_USER" != 1 ]; then
-    usr_c="$(py user-install "$USER_FILE" "$NO_USER")" || die "could not prepare your user settings (see above); nothing was changed."
+    usr_c="$(py user-install "$USER_FILE" "$NO_USER" "$FLAG_MODEL")" || die "could not prepare your user settings (see above); nothing was changed."
     [ -n "$usr_c" ] || die "your user settings came out empty; nothing was changed."
   fi
   confirm "Write the system policy to $MANAGED_FILE (administrator rights may be needed)?" || die "cancelled; nothing was changed."
@@ -646,16 +762,17 @@ cmd_install() {
     updated)   ok "system policy updated: $MANAGED_FILE (previous version kept as ${BACKUP##*/})";;
     unchanged) ok "system policy already up to date: $MANAGED_FILE";;
   esac
-  local dmodel dlabel dtier before after
+  local dmodel dlabel dtier before after note
   IFS=$'\t' read -r dmodel dlabel dtier <<<"$(py default-model)"
   if [ "$NO_USER" = 1 ]; then say "  - skipped your user settings (--no-user-settings)"
   else
     before="$(user_get model)"
+    if [ -n "$FLAG_MODEL" ]; then note=" (from --model)"; elif [ -n "$before" ]; then note="; kept your existing model choice if it is allowed"; else note=""; fi
     write_user "$usr_c"
     after="$(printf '%s' "$usr_c" | py getkey model)"
     case "$USER_STATE" in
       unchanged) ok "your settings already match: $USER_FILE (model ${after:-$dmodel})";;
-      written)   ok "your defaults written to $USER_FILE: model ${after:-$dmodel}, effort $(printf '%s' "$usr_c" | py getkey effortLevel)${before:+; kept your existing model choice if it is allowed}";;
+      written)   ok "your defaults written to $USER_FILE: model ${after:-$dmodel}, effort $(printf '%s' "$usr_c" | py getkey effortLevel)$note";;
     esac
   fi
   bypass_report
@@ -687,6 +804,7 @@ cmd_update() {
     updated)   ok "system policy updated (previous version kept as ${BACKUP##*/})";;
     unchanged) ok "system policy already matches the catalog and defaults; nothing to do";;
   esac
+  py warnings | while IFS= read -r _w; do warn "$_w"; done
   py status-user "$USER_FILE" 2>/dev/null | grep '^bad:' | sed 's/^bad:/  ! /' || true
   return 0
 }
@@ -695,8 +813,10 @@ set_model() {   # set_model <alias|id>
   local info id label tier; info="$(py resolve "$1")"; IFS=$'\t' read -r id label tier <<<"$info"
   apply_user py user-set "$USER_FILE" model "$id"
   ok "default model is now $label ($id); applies to new sessions (inside a session use /model)"
+  say "    Note: if your company's gateway policy sets a starting model, Claude Code gives that policy priority over this setting at launch; inside Claude Code use /model, or start with: claude --model $id"
   case "$tier" in
     upgrade) say "    $label costs more per request and uses your weekly/monthly budget faster. Go back with: $SELF downgrade";;
+    previous) say "    $label is an earlier model generation. Go back to the company default with: $SELF downgrade";;
     fast)    say "    $label is the fastest and cheapest; use it for simple, high-volume tasks.";;
   esac
 }
@@ -744,6 +864,7 @@ cmd_status() {
     done <<EOF
 $pol
 EOF
+    py warnings | while IFS= read -r line; do warn "$line"; done
     resolve_gateway
     if [ -n "$GW_URL" ] && [ -n "$gw" ] && [ "${GW_URL%/}" != "$gw" ]; then
       bad "the installed gateway ($gw) differs from this installer's ($GW_URL, from $GW_FROM); switch with: $SELF install"
@@ -765,7 +886,7 @@ EOF
   [ "$FAILED" = 0 ] || exit 1
 }
 
-cmd_print_managed() { need_gateway; py policy "$GW_URL"; }
+cmd_print_managed() { need_gateway; py policy "$GW_URL"; py warnings | while IFS= read -r _w; do notice "$_w"; done; }
 
 cmd_uninstall() {
   if [ -f "$MANAGED_FILE" ]; then
@@ -780,8 +901,16 @@ cmd_uninstall() {
       if [ "$SYS_STATE" = unchanged ]; then ok "nothing to remove: no gateway policy values this installer wrote are left in $MANAGED_FILE"
       else ok "removed the gateway policy from $MANAGED_FILE (other settings in it were kept; a backup was saved)"; fi
     fi
-    [ -z "$left" ] || warn "left alone because they no longer match what this installer writes (an admin changed them): $(printf '%s' "$left" | tr '\n' ' ')
-      Remove them too with: $SELF uninstall --force"
+    if [ -n "$left" ]; then
+      local keys; keys="$(printf '%s' "$left" | tr '\n' ' ')"
+      if printf '%s\n' "$left" | grep -qE '^(forceLoginMethod|forceLoginGatewayUrl|allowedProviders)$'; then
+        warn "STILL LOCKED: these no longer match what THIS installer would write (an admin changed them, or they came from another version or catalog), so they were left alone: $keys
+      Remove them too with: sudo bash $SELF uninstall --force"
+      else
+        warn "left alone because they no longer match what THIS installer would write (an admin changed them, or another version or model catalog wrote them): $keys
+      The sign-in lock itself is gone; these only limit which models can be chosen. To remove them too: sudo bash $SELF uninstall --force"
+      fi
+    fi
   else warn "no system policy found at $MANAGED_FILE"; fi
   say "  Your user settings were left alone. Run /logout in Claude Code to drop the gateway session."
 }

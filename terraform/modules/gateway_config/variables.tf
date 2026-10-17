@@ -54,3 +54,15 @@ variable "store_max_connections" {
   type        = number
   default     = 5
 }
+
+variable "trusted_proxies" {
+  description = "listen.trusted_proxies: hops whose X-Forwarded-For the gateway believes. Cloud Run's front end; with the internal load balancer also its proxy-only subnet."
+  type        = list(string)
+  default     = ["169.254.0.0/16"]
+}
+
+variable "allow_cidrs" {
+  description = "access_control.allow_cidrs: client address ranges the gateway accepts. Empty renders no access_control section."
+  type        = list(string)
+  default     = []
+}

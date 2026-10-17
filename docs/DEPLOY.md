@@ -10,6 +10,11 @@ Terraform does all of it except one console step (the Google OAuth client, below
  Cloud Scheduler (every minute, OIDC) ─▶ budget app /api/internal/tick     budget app ─▶ GCS state bucket, Cloud Logging
 ```
 
+> **Team setup (enterprise edge).** This guide describes the default trial topology (private Cloud Run, Google IAM, local proxy). For a
+> team, `app_access = "iap"` puts Identity-Aware Proxy in front of the budget app and `gateway_exposure = "internal_lb"` gives the
+> gateway a private https name behind an internal load balancer: see [`terraform/examples/`](../terraform/examples/), `terraform output
+> edge_next_steps`, and the step-by-step [INSTALL.md](INSTALL.md). This configuration needs the Google provider 7.30 or newer in every topology: run `terraform init -upgrade` (the old lock file pins 6.x) and rehearse the upgrade on a copy of your state first (section 11, "Enterprise edge: operating and security notes").
+
 ## 1. Prerequisites
 
 * A Google Cloud project with **billing enabled**, and permission to create resources in it (Owner is simplest for a trial).
@@ -26,7 +31,7 @@ Terraform does all of it except one console step (the Google OAuth client, below
 ```bash
 cd terraform
 ./setup.sh --create-state-bucket   # wizard: project, region, admins, domains, PROFILE, public URL, state bucket, OAuth client id/secret
-terraform init                     # remote state in the bucket (an existing local state: terraform init -migrate-state)
+terraform init -upgrade            # provider 7.30+; remote state in the bucket (an existing local state: add -migrate-state)
 terraform apply -target=google_artifact_registry_repository.images -target=google_project_service.apis
 PROJECT_ID=<project> REGION=<region> ../deploy/build-push.sh      # prints the budget-app image tag
 terraform apply -var app_image_tag=<that tag>
@@ -179,12 +184,29 @@ someone who can replace both.
 ## 6. Models
 
 [`config/models.json`](../config/models.json) is the single source of truth. Each entry has an `alias` (`sonnet`, `opus`, `haiku`),
-the Vertex model `id`, label/tier/description, `enabled`, and optional `pricePerMTok`. `default` names the alias everyone starts on.
-Terraform turns it into the gateway policy (`availableModels`, default first, `enforceAvailableModels`), pins
+the Vertex model `id`, label/tier/description, `enabled`, and optional `pricePerMTok`. `default` names the alias (or id) everyone starts on.
+Terraform turns it into the gateway policy (`availableModels`, every enabled model, default first, `enforceAvailableModels`, and `model` set explicitly to the default: Anthropic documents that `availableModels` alone does not change a gateway session's default), pins
 `ANTHROPIC_DEFAULT_{SONNET,OPUS,HAIKU}_MODEL` for every engineer, and passes the catalog to the budget app as `MODELS_JSON`.
 
+The catalog ships Sonnet 5.5, Opus 5.5 and Haiku 5.5 plus **Sonnet 4.6** (`claude-sonnet-4-6`) and **Opus 4.6** (`claude-opus-4-6`) with tier `previous`.
+Vertex model ids have no date suffix. Every enabled entry is allowed (people pick the 4.6 ones by name: `claude-gateway-setup.sh model sonnet-4-6`),
+but only an entry that *pins* its family sets `ANTHROPIC_DEFAULT_<FAMILY>_MODEL`. An entry has an optional `family` (`sonnet`, `opus`, `haiku`;
+default: its alias when that is one of them) and `pin` (default: true only when alias == family). At most one entry per family may pin.
+
+**Run 4.6 as the default for everyone:** set `"default": "sonnet-4-6"`, give `sonnet-4-6` and `opus-4-6` `"pin": true`, give `sonnet` and `opus` `"pin": false`,
+and swap their `tier` values and descriptions (4.6 takes `default`/`upgrade`, 5.5 becomes `previous`; `upgrade` follows the tier). Then `cp config/models.json client/models.json`,
+`terraform apply`, **rebuild and redistribute the installer** with `scripts/package-client.sh` (a stamped installer carries its own catalog), and have engineers run the new
+installer's `update` (machine policy) and, for a personal model setting, `downgrade` or `reset`. The sonnet and opus pins then resolve to the 4.6 ids, the gateway policy
+starts everyone on Sonnet 4.6, and the 5.5 entries stay available by name. A family with entries but no pin is warned about (the Models page, the installer, `/api/models`).
+To go back, restore the edits. Full walkthrough: [INSTALL.md section 7](INSTALL.md#7-models-enable-sonnet-46-and-opus-46).
+
+**Region.** Claude 4.6 is served on Vertex AI from `global`, `us-east5`, `europe-west1` and `asia-southeast1`, **not** `europe-west2`. The default
+`vertex_region = "global"` works. If an upstream uses another region while a 4.6 entry is enabled, `terraform plan` prints a warning from the check
+`claude_4_6_served_in_upstream_regions` (a warning, not an error, because Google's list can change): use `global`, add an upstream in a supported
+region, or set `"enabled": false` on the 4.6 entries. Cloud Run itself may live in `europe-west2`; only the model location matters.
+
 To add or retire a model: edit the file (set `"enabled": false` to retire), `terraform apply`. The plan fails with a readable message if
-the default alias does not exist or is disabled, or ids/aliases repeat. The budget-app image also contains the file as a fallback;
+the default does not exist or is disabled, ids/aliases repeat, two entries pin the same family, or a pinned entry is disabled or has no family. The budget-app image also contains the file as a fallback;
 Terraform's `MODELS_JSON` wins at runtime, so a rebuild is not needed.
 
 ## 7. Upstreams and failover
@@ -326,6 +348,72 @@ If your Claude Code release logs differently, adjust the filters in `terraform/m
 * Gateway write keys are written into the gateway config secret (the gateway reads its config from a file). Anyone with
   `secretmanager.versions.access` on that secret can read them.
 * Cloud SQL has no public IP; only the gateway reaches it over the VPC.
+
+### Enterprise edge: operating and security notes (IAP, internal load balancer, BigQuery)
+
+Only for `app_access = "iap"`, `gateway_exposure = "internal_lb"` or `analytics = "bigquery"` (the step-by-step is [INSTALL.md](INSTALL.md); the topology contract is in [ARCHITECTURE.md](ARCHITECTURE.md)).
+
+* **Upgrading an existing deployment to the 7.x Google provider: rehearse on a copy of the state, never on the real one.** The configuration now
+  needs `hashicorp/google` 7.30+ (and `hashicorp/tls`) in EVERY topology, and the old `.terraform.lock.hcl` pins 6.x. Recipe (a state-copy plan;
+  it writes nothing to your real state or project):
+
+  ```bash
+  TMP="$(mktemp -d)" && cp -R terraform "$TMP/tf" && cd "$TMP/tf"
+  rm -rf .terraform .terraform.lock.hcl backend.tf              # leave the real directory and its backend alone
+  # remote state: terraform -chdir=<real terraform dir> state pull > terraform.tfstate     (local state: the cp already copied it)
+  export GOOGLE_OAUTH_ACCESS_TOKEN=fake-token                  # -refresh=false below calls no API; data sources would, so set project_number if you use IAP
+  terraform init -upgrade -backend=false
+  terraform plan -refresh=false -lock=false -out=plan.bin
+  terraform show -json plan.bin | jq -r '.resource_changes[] | select(.change.actions != ["no-op"]) | "\(.change.actions|join(",")) \(.address)"'
+  ```
+
+  Read that list. Expected churn: provider-schema attributes (`deletion_policy = "DELETE"` on many resources, new computed fields), new Cloud Run
+  revisions (the `MODELS_JSON`/`CONFIG_HASH` env values follow the catalog), and `terraform_data.edge_checks` as a **create**. There must be NO
+  `delete,create` (replace) line for `google_sql_database_instance.main`, `google_cloud_run_v2_service.*` or `google_secret_manager_secret.*`; if there is one,
+  stop. A plan with `-refresh=false` cannot see drift, so on the real directory run `terraform apply -refresh-only` first (it upgrades the
+  state format and shows drift) and only then `terraform apply`. `terraform init -upgrade` rewrites `.terraform.lock.hcl` with the checksums of the machine
+  that ran it; for a team also run `terraform providers lock -platform=linux_amd64 -platform=darwin_arm64` and commit the file.
+* **Saved plans are secrets.** `terraform plan -out=...` and `terraform show -json` carry sensitive values in clear (generated passwords, the TLS
+  private key, secret contents). Only the human-readable plan is redacted. Do not upload plan files as CI artifacts; treat them like the state.
+* **Client addresses behind the internal load balancer.** The gateway walks `X-Forwarded-For` from the right and takes the first hop that is not a trusted
+  proxy, provided the connection itself came from a trusted peer. Google's load balancer appends `<client>,<load balancer address>`, so Terraform
+  trusts the Cloud Run front end (`169.254.0.0/16`), the load balancer's forwarding-rule address (`lb_subnet_cidr`, or exactly `lb_ip` as a /32 when you
+  pin it) and the proxy-only subnet (`terraform output effective_settings` lists `gateway_trusted_proxies`). Keep `lb_subnet_cidr` for the load balancer
+  only. With that, `client_ip` in the gateway's audit events and the per-IP sign-in limits are per engineer. (From the gateway's documentation and
+  its resolver; the exact header layout of the Cloud Run hop is not verified against a live deployment: look at `client_ip` in the first audit events.)
+  A client cannot spoof its address: anything it adds to the header sits to the left of the first untrusted hop and is ignored.
+* **`gateway_allow_cidrs`** (`access_control.allow_cidrs`) judges that resolved client address. Use your engineers' VPN/office ranges. The budget app and the
+  tick job call the gateway through the same load balancer from `cc-gateway-subnet` (10.0.0.0/24), so Terraform adds that range for you. Set it only after you
+  have seen real `client_ip` values; a wrong list answers 403 `ip_not_allowlisted` to everyone (only `/healthz` and `/readyz` are exempt). IPv4 only, no /0.
+  Without it the gateway only logs and audits `access.public_client` (once per process) when a request comes from a non-private address; an alert watches that event.
+* **The gateway's run.app URL is switched off** with `gateway_exposure = "internal_lb"` (`default_uri_disabled`), because ingress "internal and load balancing" still
+  admits callers inside the VPC, Private Google Access and on-prem hosts that resolve `*.run.app`, and with the invoker check off nothing there asks for a token. The load
+  balancer (serverless NEG) and the budget app (it calls `https://<gateway_hostname>`) do not use that URL. The same is done for the budget app with `app_domain`. So
+  `gcloud run services describe claude-gateway --format='value(status.url)'` may be empty in that mode: use the hostname.
+* **Going back to the trial topology** (`gateway_exposure = "run_app"`): `invoker_iam_disabled` returns from `true` to unset and the ingress to "all". Verify IAM is enforced
+  again right after the apply: `curl -s -o /dev/null -w '%{http_code}\n' "$(gcloud run services describe claude-gateway --region <region> --format='value(status.url)')/healthz"` must
+  print 403 (not 200). If it prints 200 the flag did not clear (an unverified risk of the provider's Optional, non-computed field): turn the IAM check back on in the Cloud Run console (service, Security, Authentication) or with the gcloud flag for it, then fix the cause before anyone relies on the service being private.
+* **TLS.** For production use `gateway_tls = { mode = "provided", cert_pem = ..., ca_pem = ... }` with `gateway_tls_key_pem` (sensitive, in a git-ignored `*.auto.tfvars` or
+  `TF_VAR_gateway_tls_key_pem`) from your corporate PKI: engineers already trust that CA and no CA key exists in the state. `self_signed` is for trials: Terraform creates a CA
+  (5 years, may only sign leaf certificates, but NOT restricted to your hostname: the tls provider has no name constraints) and a leaf for the hostname (1 year). **The CA private
+  key is in the state**, so whoever reads the state can mint a certificate for any site that the machines trusting this CA accept. Keep the state private, and prefer `provided`.
+  The leaf is NOT renewed automatically (`gateway_tls_early_renewal_hours = 0`): a new leaf makes Claude Code re-pin, so an unrelated `terraform apply` never does it silently. Plans warn
+  during the last 60 days (`check "gateway_leaf_expiry"`, evaluated when a state exists); `terraform output gateway_cert_expires` has the date. Rotate on purpose, after announcing it:
+  `terraform apply -replace='tls_locally_signed_cert.gateway_leaf[0]'`. After it has expired the next apply replaces it. A TLS failure never reaches Cloud Run's request metrics, so the 5xx alerts stay quiet: put the date in a calendar,
+  or probe `https://<gateway_hostname>/healthz` from inside the network. (There is no Terraform alert on load balancer health or certificate expiry: the metric names could not be verified offline.)
+* **First-apply ordering that the plan cannot prove.** (1) The IAP service agent: Terraform asks Google to create it (`gcloud beta services identity create`, best effort, needs `gcloud` on the machine
+  that applies; `iap_create_agent_with_gcloud = false` skips it) before it grants the agent `run.invoker`; if the grant still stops with "service account ... does not exist", run that command by hand and apply
+  again. (2) With `app_domain`, the load balancer's serverless NEG is created before the Cloud Run service it names (a reference would be a dependency cycle through `IAP_AUDIENCE`). If Google refuses that, set
+  `app_domain = null`, apply (the service is created with direct IAP), set `app_domain` again and apply. (3) The lb and proxy-only subnets are created after the Service Networking range (a /16 that Google chooses
+  for Cloud SQL) so an overlap is rejected by Google instead of racing; after the first apply a `check` compares them.
+* **BigQuery analytics** (`analytics = "bigquery"`): raw log tables (every gateway log field, including client addresses and e-mails) live in `claude_gateway_logs` and nobody but project owners/editors and the log sink
+  can read them. Analysts use the view `claude_gateway_analytics.v_gateway_requests` (an authorized view, so it needs no access to the raw dataset); give them access with `analytics_readers`
+  (`roles/bigquery.dataViewer` on that dataset only, plus `roles/bigquery.jobUser` on the project to run queries, billed to this project). The view has no e-mail column unless `analytics_include_emails = true`.
+  Raw partitions expire after `analytics_retention_days` (default: the profile's `log_retention_days`, 30/400). `spend.blocked` events are not in the view, so it undercounts requests refused for a cap.
+  Cost: storage about 0.02 USD per GB-month, streaming inserts about 0.05 USD per GB, queries are billed to whoever runs them.
+* **Watch items.** The tick job runs every minute with direct VPC egress in `cc-gateway-subnet` (/24, shared with the gateway and the app); if you size the gateway up, check that released addresses do not exhaust it.
+  The global app backend uses `protocol = "HTTPS"` with a serverless NEG and the gateway backend `timeout_sec = 3600`; both are unverified until a first apply. The custom-domain load balancer has no HTTP:80 redirect
+  and no Cloud Armor unless you set `app_security_policy` (IAP is the gate). `app_viewers` with `domain:`/`group:` members give everyone in them read access to all per-person usage and e-mails (`view_access = "open"`).
 
 ## 12. Optional: let Terraform create the project
 

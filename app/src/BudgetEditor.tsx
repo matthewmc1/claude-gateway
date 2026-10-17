@@ -43,7 +43,7 @@ export function BudgetEditor({ kind, period, budget, own, defaultCents, onSave, 
   people?: PersonCaps[] | null; style?: any;
 }) {
   const { t } = useTheme();
-  const { admin } = useAuth();
+  const { admin, iap } = useAuth();
   const who = oneLine(subject);
   const fallbackCents = defaultCents != null ? defaultCents : period === 'weekly' ? 5000 : 20000;
   const init = useMemo(() => {
@@ -125,7 +125,7 @@ export function BudgetEditor({ kind, period, budget, own, defaultCents, onSave, 
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap', flex: 1 }}>
           <Txt v="h3">{period === 'weekly' ? 'Weekly budget' : 'Monthly budget'}</Txt>
-          <AdminTag signedIn={!!admin} />
+          <AdminTag signedIn={!!admin} iap={iap} />
         </View>
         {st ? <Chip label={st.label} color={st.color} /> : null}
       </View>

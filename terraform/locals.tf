@@ -111,7 +111,8 @@ locals {
     local.oidc_is_google && var.oidc.google_workspace_domain != null ? { hd = var.oidc.google_workspace_domain } : {},
   )
 
-  public_url   = trimsuffix(var.public_url, "/")
+  # Private load balancer: the gateway is https://<gateway_hostname> (edge_locals.tf); otherwise what you set, default the local proxy.
+  public_url   = local.gateway_lb ? local.gateway_lb_url : trimsuffix(coalesce(var.public_url, "http://localhost:8891"), "/")
   redirect_uri = "${local.public_url}/oauth/callback"
 
   # ---- upstreams ----
@@ -134,12 +135,12 @@ locals {
 
   registry = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.images.repository_id}"
 
-  apis = [
+  apis = concat([
     "run.googleapis.com", "sqladmin.googleapis.com", "secretmanager.googleapis.com", "artifactregistry.googleapis.com",
     "aiplatform.googleapis.com", "compute.googleapis.com", "servicenetworking.googleapis.com", "iam.googleapis.com",
     "iamcredentials.googleapis.com", "logging.googleapis.com", "cloudscheduler.googleapis.com", "monitoring.googleapis.com",
     "storage.googleapis.com", "cloudresourcemanager.googleapis.com", "serviceusage.googleapis.com",
-  ]
+  ], local.edge_apis)
 }
 
 # Cross-variable checks (variable validation cannot see other variables in Terraform 1.5).

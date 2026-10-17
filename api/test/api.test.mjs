@@ -60,7 +60,7 @@ test('open reads need no session and have the documented shapes', async () => {
   const s = await boot();
   const health = await s.call('GET', '/api/health');
   assert.equal(health.status, 200);
-  assert.deepEqual(health.json, { gateway: true, usage: { source: 'demo', ok: true }, demo: false, accounts: true, viewAccess: 'open', maxOverrideDays: 90, admin: null });
+  assert.deepEqual(health.json, { gateway: true, usage: { source: 'demo', ok: true }, demo: false, accounts: true, viewAccess: 'open', maxOverrideDays: 90, admin: null, auth: 'session', identity: null });
 
   const users = (await s.call('GET', '/api/users?range=7d')).json;
   assert.equal(users.range, '7d'); assert.equal(users.data, 'all'); assert.equal(users.demo, false); assert.deepEqual(users.usage, { source: 'demo', ok: true });

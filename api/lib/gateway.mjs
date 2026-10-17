@@ -4,12 +4,33 @@
 //   ping() -> bool                 listLimits() -> limit[]            effective(subs) -> row[]      effectiveAll() -> row[]
 //   audit(limit) -> event[]        upsert(scope, period, cents|null, who) -> limit      remove(id, who) -> void
 //   `who` = { key, actor }: the real gateway authenticates with `key`; the twin records `actor`.
+import https from 'node:https';
 import { HttpError } from './http.mjs';
 
 export const PERIODS = ['daily', 'weekly', 'monthly'];
 const MAX_PAGES = 100;                                              // x 1000 rows per page
 
+// fetch() cannot take a custom CA without undici (we ship no dependencies), so a gateway behind a self-signed or corporate CA
+// (GATEWAY_CA_PEM) is called with node:https. The PEM is the ONLY trust anchor for that call; the certificate's name must still match the URL.
+// Returns the small slice of the fetch Response the client below uses: ok, status, text().
+const MAX_RESPONSE = 16 * 1024 * 1024;
+export function caFetch(ca) {
+  const agent = new https.Agent({ ca, keepAlive: true, maxCachedSessions: 0 });
+  return (url, { method = 'GET', headers = {}, body, signal } = {}) => new Promise((resolve, reject) => {
+    const req = https.request(url, { method, headers: { ...headers, ...(body !== undefined ? { 'content-length': Buffer.byteLength(body) } : {}) }, agent, signal }, (res) => {
+      const chunks = []; let n = 0;
+      res.on('data', (c) => { n += c.length; if (n > MAX_RESPONSE) { req.destroy(new Error('gateway response too large')); return; } chunks.push(c); });
+      res.on('error', reject);
+      res.on('end', () => { const text = Buffer.concat(chunks).toString('utf8'); resolve({ ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode, headers: res.headers, text: async () => text, json: async () => JSON.parse(text) }); });
+    });
+    req.on('error', reject);
+    req.end(body);
+  });
+}
+
 export function createHttpGateway(cfg) {
+  // No audience: no Authorization header at all (internal load balancer mode, where Cloud Run's own IAM check is off).
+  const callFetch = cfg.gatewayCaPem && /^https:/i.test(cfg.gatewayUrl) ? caFetch(cfg.gatewayCaPem) : (...a) => fetch(...a);
   let idToken = { value: '', exp: 0 };
   async function authHeader() {
     if (!cfg.gatewayAudience) return {};
@@ -22,7 +43,7 @@ export function createHttpGateway(cfg) {
     return { authorization: 'Bearer ' + idToken.value };
   }
   async function call(method, p, { body, key } = {}) {
-    const r = await fetch(cfg.gatewayUrl + '/v1/organizations/spend_limits' + p, {
+    const r = await callFetch(cfg.gatewayUrl + '/v1/organizations/spend_limits' + p, {
       method,
       headers: { ...(await authHeader()), 'x-api-key': key || cfg.readKey, ...(body ? { 'content-type': 'application/json' } : {}) },
       body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(8000),
@@ -43,7 +64,7 @@ export function createHttpGateway(cfg) {
     throw new HttpError(502, 'too many spend limits to list');
   };
   return {
-    async ping() { try { const r = await fetch(cfg.gatewayUrl + '/protocol', { headers: await authHeader(), signal: AbortSignal.timeout(3000) }); return r.ok; } catch (e) { console.error('gateway ping:', e.message); return false; } },
+    async ping() { try { const r = await callFetch(cfg.gatewayUrl + '/protocol', { headers: await authHeader(), signal: AbortSignal.timeout(3000) }); return r.ok; } catch (e) { console.error('gateway ping:', e.message); return false; } },
     listLimits: () => paged('?limit=1000', false),
     async effective(subs) {
       const rows = [];

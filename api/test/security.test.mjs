@@ -322,7 +322,7 @@ test('F7: /api/health is cheap (probes cached ~10s) and exposes only the documen
   const first = await s.call('GET', '/api/health');
   for (let i = 0; i < 50; i++) await s.call('GET', '/api/health');
   assert.equal(n.ping, 1); assert.equal(okCalls, 1);
-  assert.deepEqual(Object.keys(first.json).sort(), ['accounts', 'admin', 'demo', 'gateway', 'maxOverrideDays', 'usage', 'viewAccess']);
+  assert.deepEqual(Object.keys(first.json).sort(), ['accounts', 'admin', 'auth', 'demo', 'gateway', 'identity', 'maxOverrideDays', 'usage', 'viewAccess']);
   assert.deepEqual(Object.keys(first.json.usage).sort(), ['ok', 'source']);
   s.gw.ping = async () => false; s.clock.advance(11000);
   assert.equal((await s.call('GET', '/api/health')).json.gateway, false, 'refreshed after the TTL');

@@ -1,7 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Text, View } from 'react-native';
 import { Cancelled, ApiError, Health, Me, getMe, hasToken, health as fetchHealth, login, setUnauthorizedHandler, signOut as dropToken, logout as revokeSession } from './api';
-import { needsGate } from './logic/nav';
+import { GateKind, NOT_ADMIN_TEXT, gateKind, identityLine } from './logic/iap';
 import { font, useTheme } from './theme';
 import { Button, Card, Dialog, TextField, Txt, useToast } from './ui';
 import { Logo } from './Logo';
@@ -9,18 +9,21 @@ import { Icon } from './icons';
 
 type Auth = {
   health: Health | null; unreachable: boolean; admin: Me | null; gate: boolean;
+  /** Behind Google IAP: the company sign-in is the identity, there is no password form. `denied` = IAP did not let this browser through (401). */
+  iap: boolean; denied: boolean; gateKind: GateKind;
   /** Run an admin-only action. Opens the sign-in dialog first if needed, and again if the session turns out to be expired (401). */
   runAdmin: <T,>(why: string, fn: () => Promise<T>) => Promise<T>;
   openSignIn: (why?: string) => Promise<boolean>;
   signOut: () => void; refresh: () => void; onSignedIn: (m: Me) => void;
 };
-const Ctx = createContext<Auth>({ health: null, unreachable: false, admin: null, gate: false, runAdmin: (_w, f) => f(), openSignIn: async () => false, signOut() {}, refresh() {}, onSignedIn() {} });
+const Ctx = createContext<Auth>({ health: null, unreachable: false, admin: null, gate: false, iap: false, denied: false, gateKind: 'none', runAdmin: (_w, f) => f(), openSignIn: async () => false, signOut() {}, refresh() {}, onSignedIn() {} });
 export const useAuth = () => useContext(Ctx);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const toast = useToast();
   const [health, setHealth] = useState<Health | null>(null);
   const [unreachable, setUnreachable] = useState(false);
+  const [denied, setDenied] = useState(false);
   const [me, setMe] = useState<Me | null>(() => (hasToken() ? getMe() : null));
   const [dialog, setDialog] = useState<{ why: string } | null>(null);
   const waiter = useRef<((ok: boolean) => void) | null>(null);
@@ -29,19 +32,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const refresh = useCallback(() => {
     const started = Date.now();
     fetchHealth().then((h) => {
-      setUnreachable(false); setHealth(h);
+      setUnreachable(false); setDenied(false); setHealth(h);
       if (started < changedAt.current) return;
       if (h.admin) setMe(h.admin);
       else if (hasToken()) { dropToken(); setMe(null); }       // the server no longer recognises our session
       else setMe(null);
-    }).catch(() => setUnreachable(true));
+    }).catch((e) => { if (e instanceof ApiError && e.status === 401) { setUnreachable(false); setDenied(true); setMe(null); } else setUnreachable(true); });   // 401 on health: only IAP answers that way
   }, []);
   useEffect(() => { refresh(); const id = setInterval(refresh, 20000); return () => clearInterval(id); }, [refresh]);
   useEffect(() => { setUnauthorizedHandler(() => { changedAt.current = Date.now(); setMe(null); refresh(); }); }, [refresh]);
 
-  const openSignIn = useCallback((why = 'Sign in as an admin to make changes.') => new Promise<boolean>((resolve) => { waiter.current?.(false); waiter.current = resolve; setDialog({ why }); }), []);
+  const iap = health?.auth === 'iap' || denied;
+  const openSignIn = useCallback((why = 'Sign in as an admin to make changes.') => new Promise<boolean>((resolve) => { if (iap) return resolve(false); waiter.current?.(false); waiter.current = resolve; setDialog({ why }); }), [iap]);
   const finish = (ok: boolean) => { setDialog(null); const w = waiter.current; waiter.current = null; w?.(ok); };
   const runAdmin = useCallback(async <T,>(why: string, fn: () => Promise<T>): Promise<T> => {
+    if (iap) {                                         // no sign-in dialog: the server decides, and says plainly why a request was refused (401/403)
+      if (health && !health.identity?.admin) throw new ApiError(403, NOT_ADMIN_TEXT);
+      try { return await fn(); } catch (e) { if (e instanceof ApiError && e.status === 401) { changedAt.current = Date.now(); refresh(); } throw e; }
+    }
     if (!hasToken() && !(await openSignIn(why))) throw new Cancelled();
     try { return await fn(); } catch (e) {
       if (e instanceof ApiError && e.status === 401) {
@@ -51,16 +59,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       throw e;
     }
-  }, [openSignIn]);
+  }, [openSignIn, iap, health, refresh]);
   const signOut = useCallback(() => { void revokeSession(); changedAt.current = Date.now(); setMe(null); toast('Signed out'); refresh(); }, [toast, refresh]);
 
   const onSignedIn = useCallback((m: Me) => { changedAt.current = Date.now(); setMe(m); toast(`Signed in as ${m.name}`); refresh(); }, [toast, refresh]);
   const admin = me ?? null;
-  const value = useMemo<Auth>(() => ({ health, unreachable, admin, gate: needsGate(health?.viewAccess, admin), runAdmin, openSignIn, signOut, refresh, onSignedIn }), [health, unreachable, admin, runAdmin, openSignIn, signOut, refresh, onSignedIn]);
+  const gk = gateKind(health, denied);
+  const value = useMemo<Auth>(() => ({ health, unreachable, admin, gate: gk !== 'none', iap, denied, gateKind: gk, runAdmin, openSignIn, signOut, refresh, onSignedIn }), [health, unreachable, admin, gk, iap, denied, runAdmin, openSignIn, signOut, refresh, onSignedIn]);
   return (
     <Ctx.Provider value={value}>
       {children}
-      {dialog ? <Dialog label="Admin sign in" onClose={() => finish(false)}><LoginForm why={dialog.why} accounts={!!health?.accounts} onCancel={() => finish(false)} onDone={(m) => { onSignedIn(m); finish(true); }} /></Dialog> : null}
+      {dialog && !iap ? <Dialog label="Admin sign in" onClose={() => finish(false)}><LoginForm why={dialog.why} accounts={!!health?.accounts} onCancel={() => finish(false)} onDone={(m) => { onSignedIn(m); finish(true); }} /></Dialog> : null}
     </Ctx.Provider>
   );
 }
@@ -96,7 +105,8 @@ function LoginForm({ why, accounts, onDone, onCancel }: { why: string; accounts:
 
 /** Shown instead of the app only when the backend runs with APP_VIEW_ACCESS=admin and nobody is signed in. */
 export function SignInGate() {
-  const { t } = useTheme(); const { health, unreachable, onSignedIn } = useAuth();
+  const { t } = useTheme(); const { health, unreachable, onSignedIn, gateKind: kind } = useAuth();
+  if (kind === 'iap-denied' || kind === 'iap-not-admin') return <AccessNotice kind={kind} email={health?.identity?.email ?? null} />;
   return (
     <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, backgroundColor: t.bg }}>
       <View style={{ width: '100%', maxWidth: 400, gap: 24 }}>
@@ -109,6 +119,29 @@ export function SignInGate() {
           <LoginForm why="Use your admin account to continue." accounts={!!health?.accounts} onDone={onSignedIn} />
         </Card>
         {unreachable ? <Txt v="small" color={t.crit}>Cannot reach the budget service right now.</Txt> : null}
+      </View>
+    </View>
+  );
+}
+
+/** iap mode: nothing to type. Either IAP did not let this browser through (401), or this deployment keeps usage to admins and you are not one. */
+function AccessNotice({ kind, email }: { kind: 'iap-denied' | 'iap-not-admin'; email: string | null }) {
+  const { t } = useTheme(); const { refresh } = useAuth();
+  const denied = kind === 'iap-denied';
+  return (
+    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, backgroundColor: t.bg }}>
+      <View style={{ width: '100%', maxWidth: 440, gap: 24 }}>
+        <View style={{ gap: 14, alignItems: 'flex-start' }}>
+          <Logo size={48} />
+          <Txt v="display">Gateway Budgets</Txt>
+          <Txt v="body" color="muted">{denied
+            ? 'Your company sign-in did not let you through: it may have expired, or your account is not allowed to use this app. Reload the page to sign in again; if that does not help, ask an admin to give your account access.'
+            : 'This deployment keeps usage and budgets private to admins. You are signed in, but your account is not on the admin list: ask an admin.'}</Txt>
+          {!denied && email ? <Txt v="small" color="muted">{identityLine({ email })}</Txt> : null}
+        </View>
+        <View style={{ flexDirection: 'row', gap: 10 }}>
+          <Button kind="primary" label="Reload" onPress={() => { if (typeof location !== 'undefined') location.reload(); else refresh(); }} />
+        </View>
       </View>
     </View>
   );

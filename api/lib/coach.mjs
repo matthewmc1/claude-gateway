@@ -29,6 +29,16 @@ export function tierOf(catalog, model) {
   return list.find((c) => c.id === m || c.alias === m) || list.find((c) => c.id && m.startsWith(c.id)) || list.find((c) => c.alias && m.toLowerCase().includes(c.alias.toLowerCase())) || null;
 }
 
+// What a catalog entry means for coaching: its tier when that is default/upgrade/fast, otherwise (e.g. "previous") the role of its family,
+// so Opus 4.6 counts as the premium model and Sonnet 4.6 as a default-class one, wherever the admin pinned them.
+const ROLE_BY_FAMILY = { sonnet: 'default', opus: 'upgrade', haiku: 'fast' };
+export function roleOf(entry) {
+  if (!entry) return 'other';
+  if (entry.tier === 'default' || entry.tier === 'upgrade' || entry.tier === 'fast') return entry.tier;
+  const fam = entry.family || (ROLE_BY_FAMILY[String(entry.alias).toLowerCase()] ? String(entry.alias).toLowerCase() : null);
+  return ROLE_BY_FAMILY[fam] || 'other';
+}
+
 export function buildCoach({ user, budgets = {}, detail = {}, range = '7d', catalog, overrides = [], now = Date.now() } = {}) {
   const insights = [];
   const add = (i) => insights.push({ action: null, impact: null, ...i });
@@ -41,12 +51,26 @@ export function buildCoach({ user, budgets = {}, detail = {}, range = '7d', cata
   const okTotal = models.reduce((a, m) => a + (Number(m.ok) || 0), 0);
   const entries = (catalog?.models || []).filter((m) => m.enabled !== false);
   const dflt = entries.find((m) => m.alias === catalog?.default) || entries.find((m) => m.tier === 'default') || null;
-  const upgrade = entries.find((m) => m.tier === 'upgrade') || null;
   const fast = entries.find((m) => m.tier === 'fast') || null;
 
   const byTier = { default: 0, upgrade: 0, fast: 0, other: 0 };
   let modelled = 0;                                                // requests that actually reached a model (policy rejections have none)
-  for (const m of models) { if (isNoModel(m.model)) continue; const t = tierOf(catalog, m.model)?.tier; byTier[t in byTier ? t : 'other'] += Number(m.requests) || 0; modelled += Number(m.requests) || 0; }
+  const usedUpgrade = new Map();                                   // premium-class catalog entry -> this person's requests on it
+  for (const m of models) {
+    if (isNoModel(m.model)) continue;
+    const entry = tierOf(catalog, m.model), role = roleOf(entry), n = Number(m.requests) || 0;
+    byTier[role] += n; modelled += n;
+    if (role === 'upgrade') usedUpgrade.set(entry, (usedUpgrade.get(entry) || 0) + n);
+  }
+  // The premium model to name: the one this person actually used most (Opus 5.5 or a pinned 4.6), else the catalog's upgrade-tier entry.
+  const usedList = [...usedUpgrade.entries()].sort((a, b) => b[1] - a[1]).map(([e]) => e);
+  const upgrade = usedList[0] || entries.find((m) => m.tier === 'upgrade') || entries.find((m) => roleOf(m) === 'upgrade') || null;
+  // upgradeShare sums EVERY premium-class model, so with two in use (Opus 5.5 and Opus 4.6) it must not be put under one model's name:
+  // name the family ("Opus models") and list the models behind the number.
+  const familyName = (e) => { const f = e.family || (ROLE_BY_FAMILY[String(e.alias).toLowerCase()] ? String(e.alias).toLowerCase() : null); return f ? f[0].toUpperCase() + f.slice(1) : null; };
+  const families = new Set(usedList.map(familyName));
+  const subject = usedList.length < 2 ? upgrade?.label : families.size === 1 && [...families][0] ? `${[...families][0]} models` : 'premium models';
+  const subjectNote = usedList.length < 2 ? '' : ` (${usedList.map((e) => e.label).join(', ')})`;
   const policyRejected = models.filter((m) => isNoModel(m.model)).reduce((a, m) => a + (Number(m.requests) || 0), 0);
   const upgradeShare = modelled ? byTier.upgrade / modelled : 0;
   const maxBudgetPct = Math.max(0, ...['daily', 'weekly', 'monthly'].map((p) => { const b = budgets[p]; return b && b.capCents ? b.spendCents / b.capCents : 0; }));
@@ -57,9 +81,9 @@ export function buildCoach({ user, budgets = {}, detail = {}, range = '7d', cata
     const outRatio = upgrade.pricePerMTok?.output && dflt?.pricePerMTok?.output ? upgrade.pricePerMTok.output / dflt.pricePerMTok.output : null;
     add({
       id: 'model-upgrade-heavy', severity: heavy ? 'high' : 'medium', category: 'model',
-      title: `Most requests go to ${upgrade.label}`,
-      description: `${pct(upgradeShare)} of your ${plural(modelled, 'request')} in the ${window} used ${upgrade.label}, the premium model. It is built for the hardest problems and uses budget faster.`,
-      action: dflt ? `Keep ${upgrade.label} for hard problems and use ${dflt.label} for routine edits and questions.` : `Reserve ${upgrade.label} for hard problems.`,
+      title: `Most requests go to ${subject}`,
+      description: `${pct(upgradeShare)} of your ${plural(modelled, 'request')} in the ${window} used ${subject}${subjectNote}, the premium ${usedList.length < 2 ? 'model' : 'models'}. ${usedList.length < 2 ? 'It is' : 'They are'} built for the hardest problems and use${usedList.length < 2 ? 's' : ''} budget faster.`,
+      action: dflt ? `Keep ${subject} for hard problems and use ${dflt.label} for routine edits and questions.` : `Reserve ${subject} for hard problems.`,
       impact: outRatio && outRatio > 1 ? `${upgrade.label} output tokens cost about ${outRatio.toFixed(outRatio < 10 ? 1 : 0)}x ${dflt.label}.` : null,
     });
   }

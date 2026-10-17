@@ -1,7 +1,6 @@
 {
-  "_comment": "Admin defaults for the engineer installer. gatewayUrl: where Claude Code signs in (https origin, or leave empty and use scripts/package-client.sh to stamp it). model: alias or id from the model catalog (models.json). effortLevel: low|medium|high|xhigh. userSettings: extra user-level Claude Code settings, merged into ~/.claude/settings.json only where the engineer has not set them.",
+  "_comment": "Admin defaults for the engineer installer. gatewayUrl: where Claude Code signs in (https origin, or leave empty and use scripts/package-client.sh to stamp it). model: OPTIONAL alias or id from the model catalog (models.json); leave it out and the catalog's \"default\" decides (so moving everyone to 4.6 is one edit in config/models.json). effortLevel: low|medium|high|xhigh. userSettings: extra user-level Claude Code settings, merged into ~/.claude/settings.json only where the engineer has not set them.",
   "gatewayUrl": "",
-  "model": "sonnet",
   "effortLevel": "medium",
   "userSettings": {}
 }

@@ -196,16 +196,18 @@ variable "public_url" {
     The address engineers' Claude Code connects to; the OIDC redirect URI is <public_url>/oauth/callback. Claude Code only
     accepts a private or localhost gateway: use http://localhost:8891 with deploy/proxy.sh, or the https:// hostname of an
     internal load balancer for a team.
+    Leave it unset to get the default: http://localhost:8891 (gateway_exposure = "run_app"), or https://<gateway_hostname> with
+    gateway_exposure = "internal_lb" (derived; if you set it too it must be exactly that).
   EOT
   type        = string
-  default     = "http://localhost:8891"
+  default     = null
 
   validation {
-    condition     = can(regex("^(http://(localhost|127\\.0\\.0\\.1|\\[::1\\])|https://([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)*[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(:[0-9]{1,5})?$", var.public_url))
+    condition     = var.public_url == null || can(regex("^(http://(localhost|127\\.0\\.0\\.1|\\[::1\\])|https://([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)*[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(:[0-9]{1,5})?$", var.public_url))
     error_message = "public_url must be an origin: http:// only for localhost, 127.0.0.1 or [::1], otherwise https:// with a plain DNS name (letters, digits, hyphens and dots only), an optional port, and no path, query, spaces or shell characters. Examples: http://localhost:8891, https://claude.internal.example.com."
   }
   validation {
-    condition     = !can(regex(":[0-9]+$", var.public_url)) ? true : (tonumber(regex(":([0-9]+)$", var.public_url)[0]) >= 1 && tonumber(regex(":([0-9]+)$", var.public_url)[0]) <= 65535)
+    condition     = var.public_url == null || !can(regex(":[0-9]+$", var.public_url)) ? true : (tonumber(regex(":([0-9]+)$", var.public_url)[0]) >= 1 && tonumber(regex(":([0-9]+)$", var.public_url)[0]) <= 65535)
     error_message = "public_url: the port must be between 1 and 65535."
   }
 }

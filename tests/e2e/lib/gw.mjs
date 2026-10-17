@@ -7,7 +7,7 @@ import { E } from './env.mjs';
 import { PORTS, renderGatewayYaml } from './config.mjs';
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-export const MODELS = { sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5', haiku: 'claude-haiku-5-5' };
+export const MODELS = { sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5', haiku: 'claude-haiku-5-5', sonnet46: 'claude-sonnet-4-6', opus46: 'claude-opus-4-6' };
 export const unique = (p) => `${p}-${crypto.randomBytes(3).toString('hex')}`;
 
 // A gateway session, minted the way the gateway does: HS256 JWT signed with session.jwt_secret (claims verified against /oauth/token output).

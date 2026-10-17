@@ -9,7 +9,7 @@ Scheduler job, monitoring and alerting, and **the admin users**. The full guide 
 ```bash
 cd terraform
 ./setup.sh                      # asks a few questions, writes terraform.tfvars (+ secrets.auto.tfvars), checks it offline
-terraform init
+terraform init -upgrade                                                                                    # provider 7.30+ (an old lock file pins 6.x)
 terraform apply -target=google_artifact_registry_repository.images -target=google_project_service.apis   # registry first
 PROJECT_ID=<project> REGION=<region> ../deploy/build-push.sh                                              # build + push images
 terraform apply                                                                                          # everything else (Cloud SQL takes 10-15 min)
@@ -21,6 +21,20 @@ edit: only four values are required (`project_id`, `admin_users`, `allowed_email
 `./setup.sh --check` re-validates an existing `terraform.tfvars` without contacting Google.
 
 The registry is applied first because Cloud Run needs the images to exist; after that `terraform apply` is all you need.
+
+## Topologies
+
+| | `trial` (default) | `enterprise` | `enterprise-domain` |
+|---|---|---|---|
+| Budget app | private Cloud Run + IAM + local proxy, password | Identity-Aware Proxy on the run.app URL | IAP on a global external load balancer at `app_domain` |
+| Gateway | private Cloud Run + IAM + local proxy (`http://localhost:8891`) | internal Application Load Balancer, private DNS name, TLS | the same |
+| Variables | none (defaults) | `app_access = "iap"`, `gateway_exposure = "internal_lb"`, `gateway_hostname` | plus `app_domain` |
+| Extra cost (estimate) | 0 | about 20 USD a month | about 40 USD a month |
+
+`./setup.sh` asks which one. Examples: [`examples/`](examples/). The steps that only the console or your network can do (OAuth consent
+screen, DNS and routes to the load balancer, distributing the CA) are printed by `terraform output edge_next_steps`. The Google provider
+must be 7.30 or newer in every topology (`terraform init -upgrade`; rehearse on a copy of your state first: docs/DEPLOY.md section 11). `analytics = "bigquery"` adds a
+log sink and dataset for analysts.
 
 ## What you set
 
@@ -35,9 +49,12 @@ The registry is applied first because Cloud Run needs the images to exist; after
 | `view_access` | `open` (default) or `admin`: whether reading usage needs a sign-in |
 | `enable_monitoring`, `alert_emails`, `alert_thresholds` | Alerts and dashboard |
 | `manage_log_retention`, `log_retention_days` | Opt-in retention for the project's `_Default` log bucket |
+| `gateway_tls`, `gateway_tls_key_pem` | internal_lb: `provided` (corporate PKI, recommended) or `self_signed` (trials; CA key in the state); the key is its own sensitive variable |
+| `gateway_allow_cidrs`, `lb_subnet_cidr`, `proxy_only_subnet_cidr`, `lb_ip` | internal_lb: client ranges to allow; the load balancer's ranges (validated: private, no overlap with `cc-gateway-subnet`) |
+| `analytics_readers`, `analytics_retention_days`, `analytics_include_emails` | `analytics = "bigquery"`: who may query the analyst view (separate dataset), retention, e-mail column |
 
 Models are not a variable: edit [`../config/models.json`](../config/models.json) and apply. It drives the gateway policy,
-the `sonnet`/`opus`/`haiku` aliases pinned for every engineer and the budget app.
+the `sonnet`/`opus`/`haiku` aliases pinned for every engineer (only for entries that pin their family; Sonnet 4.6 and Opus 4.6 are allowed but not pinned until you switch the default, see docs/DEPLOY.md section 6) and the budget app. A `check` block (`model_regions.tf`) warns when an upstream region does not serve an enabled Claude 4.6 model.
 
 ## Files
 

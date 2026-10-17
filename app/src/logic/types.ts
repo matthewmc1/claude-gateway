@@ -21,6 +21,8 @@ export type Override = {
 export type UsageInfo = { source: string; ok: boolean | null };
 export type Health = {
   gateway: boolean; usage: UsageInfo; demo: boolean; accounts: boolean; viewAccess: 'open' | 'admin'; admin: { email: string; name: string } | null;
+  /** 'iap': the company sign-in (Google IAP) is the only identity, there is no login form. 'session': the admin password login. */
+  auth: 'session' | 'iap'; identity: { email: string; name: string; admin: boolean } | null;
   /** Optional: the server's longest boost in days. The app assumes 90 when absent. */
   maxOverrideDays?: number;
 };
@@ -64,10 +66,12 @@ export type CompanyRes = OverridesFlag & {
   usersWithOverrides?: number;
 };
 
-export type Tier = 'default' | 'upgrade' | 'fast' | string;
+export type Tier = 'default' | 'upgrade' | 'fast' | 'previous' | string;
+export type ModelFamily = 'sonnet' | 'opus' | 'haiku';
 export type PriceHint = { input: number | null; output: number | null; cacheRead: number | null; cacheWrite: number | null };
-export type ModelInfo = { alias: string; id: string; label: string; tier: Tier; description: string; enabled: boolean; pricePerMTok: PriceHint | null };
-export type ModelsRes = { default: string; models: ModelInfo[]; usage: { model: string; requests: number; ok: number }[] };
+/** `family` and `pinned` come from the API (it validates the catalog): pinned = this entry is what the family alias (sonnet/opus/haiku) means for everyone. */
+export type ModelInfo = { alias: string; id: string; label: string; tier: Tier; description: string; enabled: boolean; pricePerMTok: PriceHint | null; family?: ModelFamily | null; pinned?: boolean };
+export type ModelsRes = { default: string; models: ModelInfo[]; warnings?: string[]; usage: { model: string; requests: number; ok: number }[] };
 
 export type BudgetPayload = { period: Period; action: 'set' | 'unlimited' | 'inherit'; usd?: number };
 export type OverridePayload = { sub: string; period: Period; extraUsd: number; startsAt?: string; endsAt: string; reason: string };

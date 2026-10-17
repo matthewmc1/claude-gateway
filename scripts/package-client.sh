@@ -80,10 +80,10 @@ def load(path):
     try: return json.loads(open(path).read(), parse_constant=_no_const)
     except Exception as e: sys.exit("error: %s: %s" % (path, e))
 cat = load(models); d = load(defaults)
-NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
+ALIAS = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z"); ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@:/-]{0,127}\Z")   # same as the installer
 for m in (cat.get("models") if isinstance(cat, dict) and isinstance(cat.get("models"), list) else []):
-    for f in ("alias", "id"):
-        if not isinstance(m, dict) or not isinstance(m.get(f), str) or not NAME.match(m[f]): sys.exit("error: %s: every model alias and id must be plain text matching [A-Za-z0-9][A-Za-z0-9._-]{0,63}" % models)
+    if not isinstance(m, dict) or not isinstance(m.get("alias"), str) or not ALIAS.match(m["alias"]): sys.exit("error: %s: every model alias must be plain text matching [A-Za-z0-9][A-Za-z0-9._-]{0,63}" % models)
+    if not isinstance(m.get("id"), str) or not ID.match(m["id"]): sys.exit("error: %s: every model id must be plain text matching [A-Za-z0-9][A-Za-z0-9._@:/-]{0,127}" % models)
 scan(cat, models); scan(d, defaults)
 os.makedirs(out, exist_ok=True)
 d = {k: v for k, v in d.items() if k not in ("gatewayUrl", "_comment")}      # the URL is stamped separately
@@ -124,6 +124,9 @@ got="$(env -u CLAUDE_GATEWAY_URL -u CLAUDE_GATEWAY_MODELS "$OUT/claude-gateway-s
 [ "$got" = "$URL" ] || die "the stamped installer resolved '$got', expected '$URL'"
 
 echo "Built installer for $URL in $OUT"
+if [ "$MODELS" = "$ROOT/config/models.json" ] && [ -f "$ROOT/client/models.json" ] && ! cmp -s "$ROOT/config/models.json" "$ROOT/client/models.json"; then
+  echo "note: client/models.json differs from config/models.json (this installer used config/models.json). Keep them identical: cp config/models.json client/models.json" >&2
+fi
 sed 's/^/  /' "$OUT/SHA256SUMS"
 if [ -n "$SIGN_KEY" ]; then
   echo "Signed with $SIGN_KEY (detached .sig files). Publish this public-key fingerprint OUT OF BAND (not next to the files):"

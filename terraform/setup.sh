@@ -12,7 +12,15 @@
 #   --admins / ADMIN_EMAILS              comma-separated admin emails       (required)
 #   --domains / ALLOWED_DOMAINS          comma-separated sign-in domains    (default: domain of the first admin)
 #   --profile / PROFILE                  trial | production                 (REQUIRED, no default: see below)
-#   --public-url / PUBLIC_URL            what Claude Code connects to       (default: http://localhost:8891)
+#   --topology / TOPOLOGY                trial | enterprise | enterprise-domain   (default: trial)
+#                                        trial             private Cloud Run + Google IAM + local proxy (today's default)
+#                                        enterprise        budget app behind Identity-Aware Proxy, gateway behind a private internal load balancer
+#                                        enterprise-domain the same, with your own domain for the budget app (global load balancer + IAP)
+#   --gateway-hostname / GATEWAY_HOSTNAME  enterprise: private DNS name engineers connect to, e.g. claude-gateway.corp.example.com (required)
+#   --app-domain / APP_DOMAIN            enterprise-domain: domain of the budget app, e.g. claude-budget.example.com (required)
+#   --viewers / APP_VIEWERS              enterprise: members allowed to open the app besides the admins: user:a@x.com,group:eng@x.com,domain:x.com
+#   --analytics / ANALYTICS              logging | bigquery                 (default: logging)
+#   --public-url / PUBLIC_URL            trial: what Claude Code connects to (default: http://localhost:8891); derived in the enterprise topologies
 #   --workspace-domain / WORKSPACE_DOMAIN  limit Google sign-in to this Workspace domain (optional)
 #   --client-id / OIDC_CLIENT_ID         Google OAuth client id             (optional: blank = placeholder)
 #   OIDC_CLIENT_SECRET                   the client secret (environment only, never a flag; or answer the hidden prompt)
@@ -39,6 +47,7 @@ V_PROJECT="${PROJECT_ID:-}"; V_REGION="${REGION:-}"; V_ADMINS="${ADMIN_EMAILS:-}
 V_PROFILE="${PROFILE:-}"; V_URL="${PUBLIC_URL:-}"; V_WS="${WORKSPACE_DOMAIN:-}"; V_CLIENT="${OIDC_CLIENT_ID:-}"
 V_SECRET="${OIDC_CLIENT_SECRET:-}"; unset OIDC_CLIENT_SECRET
 V_BUCKET="${STATE_BUCKET:-}"
+V_TOPO="${TOPOLOGY:-}"; V_GWHOST="${GATEWAY_HOSTNAME:-}"; V_APPDOM="${APP_DOMAIN:-}"; V_VIEWERS="${APP_VIEWERS:-}"; V_ANALYTICS="${ANALYTICS:-}"
 
 say()  { printf '%s\n' "$*"; }
 note() { printf '%s\n' "$*" >&2; }
@@ -59,6 +68,11 @@ while [[ $# -gt 0 ]]; do
     --domains) V_DOMAINS="${2:?}"; shift;;
     --profile) V_PROFILE="${2:?}"; shift;;
     --public-url) V_URL="${2:?}"; shift;;
+    --topology) V_TOPO="${2:?}"; shift;;
+    --gateway-hostname) V_GWHOST="${2:?}"; shift;;
+    --app-domain) V_APPDOM="${2:?}"; shift;;
+    --viewers) V_VIEWERS="${2:?}"; shift;;
+    --analytics) V_ANALYTICS="${2:?}"; shift;;
     --workspace-domain) V_WS="${2:?}"; shift;;
     --client-id) V_CLIENT="${2:?}"; shift;;
     --state-bucket) V_BUCKET="${2:?}"; shift;;
@@ -78,6 +92,8 @@ RE_DOMAIN='^[a-z0-9.-]+\.[a-z]{2,}$'
 # localhost/127.0.0.1/[::1], else https; plain DNS labels; optional port; nothing else.
 LABEL='[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?'
 RE_URL="^(http://(localhost|127\\.0\\.0\\.1|\\[::1\\])|https://(${LABEL}\\.)*${LABEL})(:[0-9]{1,5})?\$"
+RE_HOST='^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$'
+RE_MEMBER='^((user|group|serviceAccount):[A-Za-z0-9._%+-]+@([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}|domain:([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,})$'
 RE_BUCKET='^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$'
 RE_CLIENT='^[0-9]+-[a-z0-9]+\.apps\.googleusercontent\.com$'
 
@@ -99,6 +115,8 @@ run_check() {   # run_check <tfvars> [secrets-tfvars]
     export GOOGLE_OAUTH_ACCESS_TOKEN=offline-check TF_IN_AUTOMATION=1 TF_INPUT=0 NO_COLOR=1
     # the image tag only exists after deploy/build-push.sh; the check uses a stand-in (a real value in terraform.tfvars wins)
     export TF_VAR_app_image_tag=00000000
+    # keep the downloaded providers (about 100 MB for google) between runs
+    export TF_PLUGIN_CACHE_DIR="${TF_PLUGIN_CACHE_DIR:-${TMPDIR:-/tmp}/tf-gateway-plugin-cache}"; mkdir -p "$TF_PLUGIN_CACHE_DIR" 2>/dev/null || unset TF_PLUGIN_CACHE_DIR
     terraform init -backend=false -input=false -no-color >"$tmp/init.log" 2>&1 || { echo "INIT_FAILED" >"$tmp/status"; exit 0; }
     if ! terraform validate -no-color >"$tmp/validate.log" 2>&1; then echo "VALIDATE_FAILED" >"$tmp/status"; exit 0; fi
     if terraform plan -refresh=false -lock=false -input=false -no-color >"$tmp/plan.log" 2>&1; then echo OK >"$tmp/status"; else echo "PLAN_FAILED" >"$tmp/status"; fi
@@ -195,11 +213,54 @@ fi
 V_PROFILE="$(lower "$V_PROFILE")"
 [[ "$V_PROFILE" == trial || "$V_PROFILE" == production ]] || die "profile must be trial or production"
 
-# public url
-[[ -n "$V_URL" || $INTERACTIVE == 0 ]] || { note "The address Claude Code connects to. http://localhost:8891 works with deploy/proxy.sh; a team uses an internal https hostname."; ask V_URL "Public URL" "http://localhost:8891"; }
-V_URL="${V_URL:-http://localhost:8891}"; V_URL="${V_URL%/}"
-valid "$RE_URL" "$V_URL" || die "public url must look like http://localhost:8891 or https://claude.internal.example.com"
-if [[ "$V_URL" =~ :([0-9]+)$ ]] && (( 10#${BASH_REMATCH[1]} < 1 || 10#${BASH_REMATCH[1]} > 65535 )); then die "public url must look like http://localhost:8891 or https://claude.internal.example.com (port 1-65535)"; fi
+# topology: what the deployment looks like from the outside (asks only what the choice needs)
+if [[ -z "$V_TOPO" && $INTERACTIVE == 1 ]]; then
+  note "Topology: how people reach the gateway and the budget app."
+  note "  trial              private Cloud Run behind Google IAM; everyone uses a local proxy (deploy/proxy.sh). Cheapest, simplest."
+  note "  enterprise         budget app behind Identity-Aware Proxy (browser, Google sign-in, no proxy); gateway behind a PRIVATE internal"
+  note "                     load balancer with a private DNS name and TLS (what Claude Code needs for a team). About 20 USD a month extra (estimate)."
+  note "  enterprise-domain  as enterprise, plus your own domain for the budget app (global load balancer, about 18 USD a month more)."
+  ask V_TOPO "Topology (trial, enterprise or enterprise-domain)" "trial"
+fi
+V_TOPO="$(lower "${V_TOPO:-trial}")"
+[[ "$V_TOPO" == trial || "$V_TOPO" == enterprise || "$V_TOPO" == enterprise-domain ]] || die "topology must be trial, enterprise or enterprise-domain"
+if [[ "$V_TOPO" != trial ]]; then
+  if [[ -z "$V_GWHOST" && $INTERACTIVE == 1 ]]; then
+    note "Private DNS name engineers' Claude Code connects to (a name you control, resolving to the load balancer's private IP)."
+    ask V_GWHOST "Gateway hostname (for example claude-gateway.corp.example.com)" ""
+  fi
+  V_GWHOST="$(lower "$V_GWHOST")"
+  [[ -n "$V_GWHOST" ]] || die "the enterprise topologies need a gateway hostname (--gateway-hostname / GATEWAY_HOSTNAME), for example claude-gateway.corp.example.com"
+  valid "$RE_HOST" "$V_GWHOST" || die "gateway hostname '$V_GWHOST' must be a DNS name such as claude-gateway.corp.example.com (lower case, at least one dot, not an IP address)"
+  if [[ "$V_TOPO" == enterprise-domain ]]; then
+    if [[ -z "$V_APPDOM" && $INTERACTIVE == 1 ]]; then
+      note "Domain for the budget app; you create an A record for it later (Terraform prints the IP)."
+      ask V_APPDOM "Budget app domain (for example claude-budget.example.com)" ""
+    fi
+    V_APPDOM="$(lower "$V_APPDOM")"
+    [[ -n "$V_APPDOM" ]] || die "enterprise-domain needs an app domain (--app-domain / APP_DOMAIN), for example claude-budget.example.com"
+    valid "$RE_HOST" "$V_APPDOM" || die "app domain '$V_APPDOM' must be a DNS name such as claude-budget.example.com"
+  else
+    V_APPDOM=""
+  fi
+  if [[ -z "$V_VIEWERS" && $INTERACTIVE == 1 ]]; then
+    note "Optional: who else may open the budget app (read-only), comma-separated: user:a@example.com, group:eng@example.com, domain:example.com. Admins always may."
+    ask V_VIEWERS "App viewers" ""
+  fi
+  VIEWER_LIST="$(split_csv "$V_VIEWERS")"
+  while IFS= read -r m; do [[ -z "$m" ]] || valid "$RE_MEMBER" "$m" || die "'$m' is not a member like user:a@example.com, group:eng@example.com or domain:example.com (allUsers and wildcards are never accepted)"; done <<<"$VIEWER_LIST"
+  [[ -z "$V_URL" ]] || die "--public-url is only for the trial topology: in the enterprise topologies it is derived as https://<gateway hostname>"
+  V_URL="https://$V_GWHOST"
+else
+  V_GWHOST=""; V_APPDOM=""; VIEWER_LIST=""
+  # public url
+  [[ -n "$V_URL" || $INTERACTIVE == 0 ]] || { note "The address Claude Code connects to. http://localhost:8891 works with deploy/proxy.sh."; ask V_URL "Public URL" "http://localhost:8891"; }
+  V_URL="${V_URL:-http://localhost:8891}"; V_URL="${V_URL%/}"
+  valid "$RE_URL" "$V_URL" || die "public url must look like http://localhost:8891 or https://claude.internal.example.com"
+  if [[ "$V_URL" =~ :([0-9]+)$ ]] && (( 10#${BASH_REMATCH[1]} < 1 || 10#${BASH_REMATCH[1]} > 65535 )); then die "public url must look like http://localhost:8891 or https://claude.internal.example.com (port 1-65535)"; fi
+fi
+V_ANALYTICS="$(lower "${V_ANALYTICS:-logging}")"
+[[ "$V_ANALYTICS" == logging || "$V_ANALYTICS" == bigquery ]] || die "analytics must be logging or bigquery"
 
 # google workspace domain (optional)
 if [[ -z "$V_WS" && $INTERACTIVE == 1 ]]; then
@@ -223,6 +284,7 @@ if [[ -n "$V_CLIENT" ]]; then
     printf '\n' >&2
   fi
 else
+  [[ -z "$V_SECRET" ]] || note "warning: an OAuth client secret was given without --client-id, so it is NOT written. Pass the client id too (the secret is read from OIDC_CLIENT_SECRET)."
   V_SECRET=""
 fi
 
@@ -256,7 +318,13 @@ say "  region                $V_REGION"
 if [[ "$V_PROFILE" == trial ]]; then say "  profile               trial  (NO PITR, NO deletion protection, deletable state bucket, 1-2 gateway instances)"; else say "  profile               production  (HA database, PITR, deletion protection, protected state bucket)"; fi
 say "  admins                $(printf '%s' "$ADMIN_LIST" | tr '\n' ' ')"
 say "  allowed domains       $(printf '%s' "$DOMAIN_LIST" | tr '\n' ' ')"
-say "  public_url            $V_URL"
+say "  topology              $V_TOPO"
+if [[ "$V_TOPO" == trial ]]; then say "  public_url            $V_URL"; else
+  say "  gateway hostname      $V_GWHOST   (public_url is derived: $V_URL)"
+  [[ -z "$V_APPDOM" ]] || say "  app domain            $V_APPDOM"
+  say "  app viewers           ${VIEWER_LIST:+$(printf '%s' "$VIEWER_LIST" | tr '\n' ' ')}${VIEWER_LIST:-(admins only)}"
+fi
+[[ "$V_ANALYTICS" == logging ]] || say "  analytics             $V_ANALYTICS"
 if [[ -n "$V_BUCKET" ]]; then say "  state bucket          gs://$V_BUCKET"; else say "  state bucket          (none: LOCAL state file; it will hold passwords and keys)"; fi
 if [[ -n "$V_WS" ]]; then say "  workspace domain      $V_WS"; fi
 say "  oauth client id       ${V_CLIENT:-(placeholder: sign-in will not work until you set it)}"
@@ -290,6 +358,7 @@ backup "$TFVARS"
 if [[ $HAVE_SECRET == 1 ]]; then backup "$SECRETS"; fi
 
 export S_PROJECT="$V_PROJECT" S_REGION="$V_REGION" S_PROFILE="$V_PROFILE" S_ADMINS="$ADMIN_LIST" S_DOMAINS="$DOMAIN_LIST"
+export S_TOPO="$V_TOPO" S_GWHOST="$V_GWHOST" S_APPDOM="$V_APPDOM" S_VIEWERS="$VIEWER_LIST" S_ANALYTICS="$V_ANALYTICS"
 export S_URL="$V_URL" S_WS="$V_WS" S_CLIENT="$V_CLIENT" S_TFVARS="$TFVARS" S_SECRETS="$SECRETS" S_SECRET="$V_SECRET"
 python3 -I - <<'PY'
 import json, os, datetime
@@ -305,10 +374,20 @@ out = ['# Written by setup.sh on %s. Edit freely; terraform.tfvars.example lists
        'admin_users = [']
 out += ['  { email = %s },' % q(a) for a in admins]
 out += [']', '', '# Only these email domains can sign in to the gateway.',
-        'allowed_email_domains = [%s]' % ', '.join(q(d) for d in domains), '',
-        '# What Claude Code connects to; the OAuth redirect URI is <public_url>/oauth/callback.',
-        'public_url = %s' % q(e['S_URL']), '', '# Google sign-in. client_id left out = PLACEHOLDER (see `terraform output oidc_setup_steps`).',
-        'oidc = {']
+        'allowed_email_domains = [%s]' % ', '.join(q(d) for d in domains), '']
+if e['S_TOPO'] == 'trial':
+    out += ['# What Claude Code connects to; the OAuth redirect URI is <public_url>/oauth/callback.',
+            'public_url = %s' % q(e['S_URL']), '']
+else:
+    out += ['# Enterprise edge (terraform/examples): IAP for the budget app, a private internal load balancer for the gateway.',
+            '# public_url is derived: https://<gateway_hostname>/oauth/callback is the OAuth redirect URI.',
+            'app_access      = "iap"', 'gateway_exposure = "internal_lb"', 'gateway_hostname = %s' % q(e['S_GWHOST'])]
+    if e['S_APPDOM']: out.append('app_domain      = %s' % q(e['S_APPDOM']))
+    viewers = [v for v in e['S_VIEWERS'].split('\n') if v]
+    if viewers: out.append('app_viewers     = [%s]' % ', '.join(q(v) for v in viewers))
+    out.append('')
+if e['S_ANALYTICS'] != 'logging': out += ['analytics = %s' % q(e['S_ANALYTICS']), '']
+out += ['# Google sign-in. client_id left out = PLACEHOLDER (see `terraform output oidc_setup_steps`).', 'oidc = {']
 if e['S_CLIENT']: out.append('  client_id = %s' % q(e['S_CLIENT']))
 else: out.append('  # client_id = "123456789012-abc123.apps.googleusercontent.com"')
 if e['S_WS']: out.append('  google_workspace_domain = %s' % q(e['S_WS']))
@@ -329,7 +408,7 @@ if [[ -n "$V_BUCKET" ]]; then
   ( umask 022; cat >"$BACKEND" <<BTF
 # Written by setup.sh: Terraform state lives in a private GCS bucket (it holds generated passwords and keys).
 # Bucket: versioned, uniform access, public access prevention. Grant roles/storage.objectUser on it only to the people who run Terraform.
-# First use:  terraform init            (an existing local terraform.tfstate: terraform init -migrate-state)
+# First use:  terraform init -upgrade  (an existing local terraform.tfstate: terraform init -upgrade -migrate-state)
 terraform {
   backend "gcs" {
     bucket = "$V_BUCKET"
@@ -375,15 +454,27 @@ cat <<NEXT
 
 Next:
   cd $REL
-  terraform init$([[ -n "$V_BUCKET" ]] && printf '     # remote state in gs://%s (an existing local terraform.tfstate: terraform init -migrate-state)' "$V_BUCKET")
+  terraform init -upgrade$([[ -n "$V_BUCKET" ]] && printf '     # remote state in gs://%s (an existing local terraform.tfstate: add -migrate-state)' "$V_BUCKET")
   terraform apply -target=google_artifact_registry_repository.images -target=google_project_service.apis
   PROJECT_ID=$V_PROJECT REGION=$V_REGION ../deploy/build-push.sh     # prints the budget-app image tag
   terraform apply -var app_image_tag=<that tag>     # or put app_image_tag in terraform.tfvars; Cloud SQL takes 10-15 minutes
   terraform output oidc_setup_steps     # one manual step in the Google console: create the OAuth client
   terraform output -json admin_credentials
-  terraform output -raw proxy_command | sh
+$([[ "$V_TOPO" == trial ]] && printf '  terraform output -raw proxy_command | sh' || printf '  terraform output edge_next_steps     # what only the console / your network can do: consent screen, DNS and routes, CA, managed settings')
 
 NEXT
+if [[ "$V_TOPO" != trial ]]; then
+  say "Enterprise topology ($V_TOPO). Terraform cannot do these for you; edge_next_steps spells them out after the first apply:"
+  say "  - OAuth consent screen for IAP (a project without an organization needs External + test users); if skipped, opening the app shows a Google sign-in error."
+  say "  - $V_GWHOST must resolve to the load balancer's private IP from engineers' machines, and that subnet must be routed to them (VPN/Interconnect)."
+  say "  - Engineers' machines must trust the CA (terraform output -raw gateway_ca_pem); Claude Code pins the certificate on first connect."
+  [[ -z "$V_APPDOM" ]] || say "  - A DNS A record for $V_APPDOM -> terraform output app_lb_ip, and an OAuth client for IAP on the load balancer."
+  say ""
+fi
+say "Provider versions: this configuration needs the Google provider 7.30+ (and hashicorp/tls) for EVERY topology. A .terraform.lock.hcl from an older checkout pins"
+say "  google 6.x and makes plain 'terraform init' fail, so use 'terraform init -upgrade' (it rewrites the lock file; commit the new one, and for a team add"
+say "  terraform providers lock -platform=linux_amd64 -platform=darwin_arm64 so every machine's checksums are in it). With an existing state, read 'terraform plan' before you apply."
+say ""
 if [[ -z "$V_BUCKET" ]]; then
   say "WARNING: no state bucket: Terraform will keep its state (generated passwords and keys) in a local file."
   say "  Recommended: ./setup.sh --state-bucket ${V_PROJECT}-tfstate --create-state-bucket   (or terraform/backend.tf.example)"

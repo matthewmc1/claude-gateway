@@ -60,6 +60,30 @@ exposure and usage. Activity page: audit trail of every cap change.
 * Daily caps are shown read-only; manage them with `scripts/set-limit.sh`.
 * The app only listens on `127.0.0.1` and refuses to start otherwise (see `APP_ALLOW_NON_LOOPBACK`).
 
+## Run the enterprise edge locally
+
+The deployed enterprise setup puts the budget app behind Google IAP and the gateway behind an internal load balancer with TLS. You can run the
+**same topology** on a laptop, with no cloud access, to see what engineers and admins will see and to debug origin/CORS/CSRF/TLS problems early:
+
+```bash
+scripts/edge.sh up        # certs, local IdP, gateway, ILB + IAP emulators, the app in iap mode (needs the compose Postgres, or EDGE_POSTGRES_URL)
+scripts/edge.sh status    # what answers (the app must refuse requests that bypass IAP: 401; the gateway must refuse an untrusted CA)
+scripts/edge.sh test      # the L6 end-to-end layer (Docker, a headless Chrome for the browser parts); `scripts/edge.sh down` stops only what `up` started
+```
+
+| Open | What it is |
+|---|---|
+| `http://app.localhost:19330` | the budget app behind the **IAP emulator**: sign in by picking an email (admins are `EDGE_ADMINS`, default `ada@example.com`; others are viewers). The app only trusts the signed `x-goog-iap-jwt-assertion`. Add `?secure_token_test=bad-signature` to a URL to send a broken token and watch the app refuse it. |
+| `https://gateway.localhost:19331` | the gateway behind the **ILB emulator**: TLS with a throwaway CA (`data/edge/ca.pem`, `curl --cacert ...`), `public_url` is this https URL, `/device` sign-in is served under it. Sign in with `alice@example.com` or `bob@example.com` on the local IdP page. |
+
+Browser origin, the `Host` the app sees and the allow-list are all `http://app.localhost:19330`, which is exactly what makes IAP work without a proxy.
+`*.localhost` resolves to loopback in browsers and Node. Replies are canned (`load_test_mode`), so nothing is sent to Vertex; state lives in `data/edge/` and the
+`gateway_edge` database. Ports can be changed with `EDGE_APP_PORT`, `EDGE_GATEWAY_PORT`, `EDGE_IDP_PORT`, `EDGE_GATEWAY_INTERNAL_PORT`, `EDGE_APP_INTERNAL_PORT`.
+
+**What is only emulated.** The emulators are not Google. They prove our wiring (one origin, JWT verification, CSRF defence, TLS trust, `public_url` vs `Host`), not
+Google's own behaviour: real IAP sign-in, real key rotation, the real internal Application Load Balancer, real certificates, and Claude Code's gateway-certificate
+pinning and "private address only" check are unverified until you deploy. Never point the emulators at anything but this machine.
+
 ## Vertex requirements (the usual first-run failures)
 
 | Symptom in the dashboard | Cause |

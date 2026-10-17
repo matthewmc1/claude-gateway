@@ -1,6 +1,7 @@
 import { readStore, writeStore } from './store';
 import { cleanBudgets, cleanSpend, finite, list } from './logic/sanitize';
 import { failureMessage, isOutageStatus, retryAfterSeconds } from './logic/errors';
+import { csrfHeaders, parseAuthMode, type AuthMode } from './logic/iap';
 import type { AuditEvent, BudgetPayload, CompanyRes, DataSel, DetailRes, Health, ModelsRes, Override, OverridePayload, Range, UsageInfo, UsersRes } from './logic/types';
 export * from './logic/types';
 
@@ -20,8 +21,11 @@ export const isCancelled = (e: unknown) => e instanceof Cancelled;
 export type Me = { email: string; name: string };
 let token: string | null = readStore('token', true);
 let onUnauthorized: () => void = () => {};
+/** Set from /api/health. In 'iap' mode there is no token at all and every write carries x-app-csrf. */
+let authMode: AuthMode = 'session';
+export const getAuthMode = () => authMode;
 export const setUnauthorizedHandler = (f: () => void) => { onUnauthorized = f; };
-export const hasToken = () => !!token;
+export const hasToken = () => authMode !== 'iap' && !!token;
 export function signOut() { token = null; writeStore('token', null, true); writeStore('me', null, true); }
 /** Revoke every session of this admin on the server (POST /api/logout), then forget the token. Failures are ignored: local state is always cleared. */
 export async function logout(): Promise<void> {
@@ -36,13 +40,13 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
   let r: Response;
   try {
     // The session travels in x-app-token. Never Authorization: Cloud Run IAM owns that header.
-    r = await fetch(BASE + path, { method, headers: { 'content-type': 'application/json', ...(token ? { 'x-app-token': token } : {}) }, body: body ? JSON.stringify(body) : undefined });
+    r = await fetch(BASE + path, { method, headers: { 'content-type': 'application/json', ...(token && authMode === 'session' ? { 'x-app-token': token } : {}), ...csrfHeaders(authMode, method) }, body: body ? JSON.stringify(body) : undefined });
   } catch { throw new ApiError(0, 'Cannot reach the budget service. Is it running?'); }
   const j = await r.json().catch(() => ({}));
   if (r.status === 401 && path !== '/api/login') { signOut(); if (method === 'GET') onUnauthorized(); }   // a failed write is re-prompted by runAdmin
   if (!r.ok) {
     const retryAfter = retryAfterSeconds(r.headers.get('retry-after'));
-    const special = failureMessage(r.status, method, path, retryAfter);
+    const special = failureMessage(r.status, method, path, retryAfter, authMode, j && j.error);
     if (special) throw new ApiError(r.status, special, retryAfter);
     throw new ApiError(r.status, (j && j.error) || `Request failed (${r.status})`, retryAfter);
   }
@@ -74,7 +78,12 @@ export const cancelOverride = (id: string) => req<Override>('DELETE', `/api/over
 /** POST /api/overrides/:id/retry. Older backends answer 404; callers hide the Retry button when `isMissing(e)`. */
 export const retryOverride = (id: string) => req<Override>('POST', `/api/overrides/${encodeURIComponent(id)}/retry`);
 export const isMissing = (e: unknown) => e instanceof ApiError && (e.status === 404 || e.status === 405);
-export const health = () => req<any>('GET', '/api/health').then((j): Health => ({
+export const health = () => req<any>('GET', '/api/health').then((j): Health => {
+  authMode = parseAuthMode(j.auth);
+  if (authMode === 'iap' && token) signOut();       // a leftover password session means nothing behind IAP
+  return {
+  auth: authMode, identity: j.identity && j.identity.email ? { email: String(j.identity.email), name: String(j.identity.name || j.identity.email), admin: !!j.identity.admin } : null,
   gateway: !!j.gateway, usage: usageOf(j), demo: !!j.demo, accounts: !!j.accounts, viewAccess: j.viewAccess === 'admin' ? 'admin' : 'open', admin: j.admin && j.admin.email ? { email: j.admin.email, name: j.admin.name || j.admin.email } : null,
   ...(Number.isFinite(j.maxOverrideDays) ? { maxOverrideDays: Number(j.maxOverrideDays) } : {}),
-}));
+  };
+});

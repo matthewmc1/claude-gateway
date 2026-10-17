@@ -211,10 +211,10 @@ export function CommandBox({ cmd, hint }: { cmd: string; hint?: string }) {
 export const MONO = Platform.select({ web: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', default: 'Courier' }) as string;
 
 /** Small "Admin" tag with a lock while signed out: marks controls that need an admin session. */
-export function AdminTag({ signedIn }: { signedIn: boolean }) {
+export function AdminTag({ signedIn, iap = false }: { signedIn: boolean; iap?: boolean }) {
   const { t } = useTheme();
   return (
-    <View accessibilityLabel={signedIn ? 'Admin action' : 'Admin action, sign in required'} style={{ flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 8, height: 22, borderRadius: 11, borderWidth: 1, borderColor: t.borderStrong, backgroundColor: t.surface2, alignSelf: 'flex-start' }}>
+    <View accessibilityLabel={signedIn ? 'Admin action' : iap ? 'Admin action, admins only' : 'Admin action, sign in required'} style={{ flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 8, height: 22, borderRadius: 11, borderWidth: 1, borderColor: t.borderStrong, backgroundColor: t.surface2, alignSelf: 'flex-start' }}>
       <Icon name={signedIn ? 'shield' : 'lock'} size={11} color={t.text2} stroke={2.3} />
       <Text style={{ fontFamily: font(600), fontSize: 11, color: t.text2 }}>Admin</Text>
     </View>

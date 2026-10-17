@@ -2,17 +2,17 @@
 # End-to-end suite: the REAL gateway binary (`claude gateway`) against a throwaway Postgres and a fake OIDC issuer,
 # exercised by the budget app, the usage-log parsers and the installer. Everything is hermetic and torn down afterwards.
 #
-#   scripts/e2e.sh              run every layer (L1 twin fidelity, L2 log formats, L3 app+gateway, L4 installer, L5 operations)
+#   scripts/e2e.sh              run every layer (L1 twin fidelity, L2 log formats, L3 app+gateway, L4 installer, L5 operations, L6 enterprise edge)
 #   scripts/e2e.sh l1 l3        run only the named layers (files tests/e2e/l*.test.mjs whose name starts with the argument)
 #   E2E_KEEP=1 scripts/e2e.sh   keep the temp dir (logs, config) for debugging; the container is still removed
 #   E2E_TMPDIR=/some/dir        where the temp dir is created (default: $TMPDIR or /tmp)
 #
 # Needs: docker (one container, gw-e2e-pg on 127.0.0.1:19160), the `claude` binary on PATH, node 20+, python3.
-# Uses only ports 19160-19189. Never contacts the internet. Exit code 0 = everything passed.
+# L6 also needs a headless Chrome for its browser tests (they skip without one; set CHROME=...). Uses only ports 19160-19189 and 19270-19289. Never contacts the internet. Exit code 0 = everything passed.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PG_NAME=gw-e2e-pg; PG_PORT=19160
-PORT_LIST=(19160 19161 19162 19163 19164 19165 19166)
+PORT_LIST=(19160 19161 19162 19163 19164 19165 19166 19270 19271 19272 19273 19274 19275 19276 19280 19281 19282 19283 19284)
 START=$(date +%s)
 T=""; PIDS=(); STARTED_PG=0
 
@@ -53,7 +53,7 @@ for _ in $(seq 1 80); do
   sleep 0.5
 done
 [ "$ok" -ge 2 ] || die "postgres did not become ready"
-for db in gateway_main gateway_ops gateway_vertex; do docker exec "$PG_NAME" psql -h 127.0.0.1 -U postgres -qc "CREATE DATABASE $db" >/dev/null || die "could not create database $db"; done
+for db in gateway_main gateway_ops gateway_vertex gateway_edge; do docker exec "$PG_NAME" psql -h 127.0.0.1 -U postgres -qc "CREATE DATABASE $db" >/dev/null || die "could not create database $db"; done
 
 # ---- config + secrets, fake OIDC issuer, the real gateway ----
 node "$ROOT/tests/e2e/lib/prepare.mjs" "$T" || die "could not prepare the stack config"

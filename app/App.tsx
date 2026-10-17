@@ -15,6 +15,7 @@ import { Logo } from './src/Logo';
 import { ErrorBoundary } from './src/ErrorBoundary';
 import { readStore, writeStore } from './src/store';
 import { Tab, TAB_META, hashFor, pageTitle, parseHash } from './src/logic/nav';
+import { identityLine, roleLine } from './src/logic/iap';
 import { People } from './src/screens/People';
 import { MyUsage } from './src/screens/MyUsage';
 import { Company } from './src/screens/Company';
@@ -28,20 +29,23 @@ const btn = (t: any, hovered: boolean) => ({ width: 38, height: 38, borderRadius
 
 /** 'Admin sign in' when signed out; the admin's name with a Sign out menu when signed in. */
 function AdminButton() {
-  const { t } = useTheme(); const { admin, openSignIn, signOut } = useAuth();
+  const { t } = useTheme(); const { admin, openSignIn, signOut, iap, health } = useAuth();
   const [open, setOpen] = useState(false);
   useEffect(() => {
     if (!open) return;
     const h = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
     document.addEventListener('keydown', h); return () => document.removeEventListener('keydown', h);
   }, [open]);
-  if (!admin) return <Button small icon="lock" label="Admin sign in" onPress={() => openSignIn()} />;
-  const shown = admin.email === 'local-admin' ? 'Admin' : admin.name;
+  const who = iap ? health?.identity ?? null : null;                  // behind IAP the company sign-in is the only identity: no sign-in button, no sign-out
+  if (iap && !who) return null;
+  if (!iap && !admin) return <Button small icon="lock" label="Admin sign in" onPress={() => openSignIn()} />;
+  const shown = who ? who.name : admin!.email === 'local-admin' ? 'Admin' : admin!.name;
+  const email = who ? who.email : admin!.email;
   return (
     <View style={{ position: 'relative', zIndex: 30 }}>
-      <Pressable accessibilityRole="button" accessibilityLabel={`Signed in as ${shown}. Open menu`} accessibilityState={{ expanded: open }} onPress={() => setOpen((v) => !v)}
+      <Pressable accessibilityRole="button" accessibilityLabel={`Signed in as ${shown}${who ? who.admin ? ', admin' : ', viewer' : ''}. Open menu`} accessibilityState={{ expanded: open }} onPress={() => setOpen((v) => !v)}
         style={(s: any) => [{ flexDirection: 'row', alignItems: 'center', gap: 8, height: 32, paddingHorizontal: 12, borderRadius: 10, backgroundColor: s.hovered ? t.raised : t.surface2, borderWidth: 1, borderColor: t.border }, pointer]}>
-        <Icon name="shield" size={15} color={t.good} />
+        <Icon name={who && !who.admin ? 'users' : 'shield'} size={15} color={who && !who.admin ? t.muted : t.good} />
         <Txt v="small" style={{ fontFamily: font(600), maxWidth: 160 }} numberOfLines={1}>{shown}</Txt>
         <Icon name="chevron" size={13} color={t.muted} />
       </Pressable>
@@ -50,12 +54,13 @@ function AdminButton() {
           <Pressable accessibilityLabel="Close menu" onPress={() => setOpen(false)} style={{ position: 'fixed' as any, top: 0, left: 0, right: 0, bottom: 0 }} />
           <View accessibilityRole="menu" style={[{ position: 'absolute', top: 38, right: 0, minWidth: 220, backgroundColor: t.raised, borderRadius: 12, borderWidth: 1, borderColor: t.borderStrong, padding: 6, gap: 2 }, { boxShadow: t.shadow } as any]}>
             <View style={{ paddingHorizontal: 10, paddingVertical: 8, gap: 2 }}>
-              <Txt v="small" style={{ fontFamily: font(600) }} numberOfLines={1}>{admin.name}</Txt>
-              {admin.email !== 'local-admin' ? <Txt v="small" color="muted" numberOfLines={1}>{admin.email}</Txt> : null}
+              <Txt v="small" style={{ fontFamily: font(600) }} numberOfLines={1}>{shown}</Txt>
+              {who ? <Txt v="small" color="muted">{identityLine(who)}</Txt> : email !== 'local-admin' ? <Txt v="small" color="muted" numberOfLines={1}>{email}</Txt> : null}
+              {who ? <Txt v="small" color={who.admin ? 'text2' : 'muted'} style={{ fontFamily: font(600) }}>{roleLine(who.admin)}</Txt> : null}
             </View>
-            <Pressable accessibilityRole="menuitem" onPress={() => { setOpen(false); signOut(); }} style={(s: any) => [{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 10, height: 36, borderRadius: 8, backgroundColor: s.hovered ? t.surface2 : 'transparent' }, pointer]}>
+            {who ? null : <Pressable accessibilityRole="menuitem" onPress={() => { setOpen(false); signOut(); }} style={(s: any) => [{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 10, height: 36, borderRadius: 8, backgroundColor: s.hovered ? t.surface2 : 'transparent' }, pointer]}>
               <Icon name="logout" size={15} color={t.text2} /><Txt v="small" color="text2">Sign out</Txt>
-            </Pressable>
+            </Pressable>}
           </View>
         </>
       ) : null}
@@ -187,8 +192,8 @@ function Root() {
   );
 }
 function Gate() {
-  const { t } = useTheme(); const { gate, health, unreachable } = useAuth();
-  if (!health && !unreachable) return <View style={{ flex: 1, backgroundColor: t.bg }} />;   // first health reply decides between app and sign-in page
+  const { t } = useTheme(); const { gate, health, unreachable, denied } = useAuth();
+  if (!health && !unreachable && !denied) return <View style={{ flex: 1, backgroundColor: t.bg }} />;   // first health reply decides between app and sign-in page
   return gate ? <SignInGate /> : <Shell />;
 }
 export default function App() { return <ThemeProvider><ErrorBoundary what="the app"><Root /></ErrorBoundary></ThemeProvider>; }

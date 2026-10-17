@@ -157,6 +157,8 @@ for d in Dockerfile.app Dockerfile.gateway; do
   accepts "$d: every FROM is pinned by sha256 digest" bash -c "grep -E '^FROM ' '$DEPLOY/$d' | grep -Eq '@sha256:[0-9a-f]{64}\$'"
 done
 accepts "app image runs Node 22" grep -Eq '^FROM node:22-' "$DEPLOY/Dockerfile.app"
+accepts "app image contains api/tick.mjs (the Cloud Run tick job runs `node api/tick.mjs` from the same image)" bash -c "grep -q '^COPY api/tick.mjs api/tick.mjs' '$DEPLOY/Dockerfile.app' && grep -qx '!api/tick.mjs' '$DEPLOY/Dockerfile.app.dockerignore'"
+accepts "app image default command is still the server" grep -q '^CMD \["node", "api/server.mjs"\]' "$DEPLOY/Dockerfile.app"
 
 # ============================================================================================================================
 section "budget-app image tag rule (shared by build-push.sh and terraform's app_image_tag)"

@@ -1,23 +1,25 @@
 locals {
   console_credentials_url = "https://console.cloud.google.com/apis/credentials?project=${var.project_id}"
   console_consent_url     = "https://console.cloud.google.com/auth/overview?project=${var.project_id}"
+  # Exactly the shape the installer's defaults.json accepts (client/claude-gateway-setup.sh: gatewayUrl, model, effortLevel,
+  # userSettings). model stays empty so the catalog's "default" (config/models.json) decides; the catalog itself reaches the
+  # installer through client/models.json, not through this file.
   client_defaults = {
     gatewayUrl   = local.public_url
-    defaultAlias = module.gateway_config.default_alias
-    defaultModel = module.gateway_config.default_model_id
-    effort       = var.client_default_effort
-    models       = module.gateway_config.available_models
+    model        = ""
+    effortLevel  = var.client_default_effort
+    userSettings = {}
   }
 }
 
 output "gateway_url" {
-  description = "Cloud Run URL of the gateway (private; reach it through the local proxy)."
-  value       = google_cloud_run_v2_service.gateway.uri
+  description = "What engineers' Claude Code connects to: the Cloud Run URL of the private gateway (reach it through the local proxy), or with gateway_exposure = internal_lb the private https://<gateway_hostname>."
+  value       = local.gateway_lb ? local.gateway_lb_url : google_cloud_run_v2_service.gateway.uri
 }
 
 output "app_url" {
-  description = "Cloud Run URL of the budget app (private)."
-  value       = google_cloud_run_v2_service.app.uri
+  description = "Where people open the budget app: its Cloud Run URL (private through IAM, or behind IAP), or the custom domain with app_domain."
+  value       = local.app_iap_lb ? local.app_lb_url : (local.app_iap_direct ? "https://${local.app_run_host}" : google_cloud_run_v2_service.app.uri)
 }
 
 output "admin_credentials" {
@@ -43,8 +45,8 @@ output "dashboard_url" {
 
 # ---- reaching the private services ---------------------------------------------------------------------------------------
 output "proxy_command" {
-  description = "Open the private gateway and budget app on localhost (uses your own Google login)."
-  value       = "GATEWAY_URL=${google_cloud_run_v2_service.gateway.uri} APP_URL=${google_cloud_run_v2_service.app.uri} ../deploy/proxy.sh"
+  description = "Open the private gateway and budget app on localhost (uses your own Google login). Not needed with gateway_exposure = internal_lb (the budget app then sits behind IAP, or the gateway has its own private address)."
+  value       = local.gateway_lb ? "echo 'no local proxy for this topology: see terraform output edge_next_steps'" : "GATEWAY_URL=${google_cloud_run_v2_service.gateway.uri} APP_URL=${local.app_iap_lb ? "https://${local.app_service_name}-${local.project_number}.${var.region}.run.app" : google_cloud_run_v2_service.app.uri} ../deploy/proxy.sh"
 }
 
 # ---- sign-in (Google OAuth client: console only, no API) ---------------------------------------------------------------
@@ -107,9 +109,7 @@ output "next_steps" {
     1. First apply only: build and push the images once the registry exists (docs/DEPLOY.md):
          PROJECT_ID=${var.project_id} REGION=${var.region} ../deploy/build-push.sh
        then set app_image_tag to the timestamp tag it prints (there is no default and "latest" is refused) and run terraform apply.
-    2. Open the private services on localhost:
-         terraform output -raw proxy_command | sh
-         gateway http://localhost:8891    budget app http://localhost:8892
+    2. ${local.gateway_lb ? "" : "Open the private services on localhost:\n         terraform output -raw proxy_command | sh\n         gateway http://localhost:8891    budget app ${local.app_iap ? "(through IAP: its URL in a browser)" : "http://localhost:8892"}"}${local.gateway_lb || local.app_iap ? "${local.gateway_lb ? "" : "\n       "}Enterprise edge (IAP and/or internal load balancer): the steps only the console can do, DNS and the MDM text:\n         terraform output edge_next_steps" : ""}
     3. Admin passwords:  terraform output -json admin_credentials
     4. Sign-in client:   terraform output oidc_setup_steps
     5. Engineers:        client/claude-gateway-setup.sh install --gateway-url '${local.public_url}'
@@ -127,26 +127,34 @@ resource "local_file" "client_defaults" {
 output "effective_settings" {
   description = "The settings in force after the profile and your overrides."
   value = {
-    profile                = var.profile
-    db_tier                = local.db_tier
-    db_availability        = local.p.db_availability
-    db_deletion_protection = local.db_deletion_protection
-    gateway_min_instances  = local.gateway_min_instances
-    gateway_max_instances  = local.gateway_max_instances
-    gateway_db_connections = local.gateway_db_conns
-    db_max_connections     = local.db_max_connections
-    gateway_vertex_role    = var.gateway_vertex_role
-    scope_app_log_access   = var.scope_app_log_access
-    scheduler_audience     = local.scheduler_audience
-    state_force_destroy    = local.state_force_destroy
-    log_retention_days     = local.log_retention_days
-    manage_log_retention   = var.manage_log_retention
-    alert_thresholds       = local.th
-    alert_emails           = local.alert_emails
-    upstreams              = local.upstreams
-    allowed_email_domains  = local.allowed_email_domains
-    oidc_extra_auth_params = local.extra_auth_params
-    oidc_configured        = nonsensitive(local.oidc_ready)
-    enabled_models         = module.gateway_config.available_models
+    profile                 = var.profile
+    db_tier                 = local.db_tier
+    db_availability         = local.p.db_availability
+    db_deletion_protection  = local.db_deletion_protection
+    gateway_min_instances   = local.gateway_min_instances
+    gateway_max_instances   = local.gateway_max_instances
+    gateway_db_connections  = local.gateway_db_conns
+    db_max_connections      = local.db_max_connections
+    gateway_vertex_role     = var.gateway_vertex_role
+    scope_app_log_access    = var.scope_app_log_access
+    scheduler_audience      = local.scheduler_audience
+    state_force_destroy     = local.state_force_destroy
+    log_retention_days      = local.log_retention_days
+    manage_log_retention    = var.manage_log_retention
+    alert_thresholds        = local.th
+    alert_emails            = local.alert_emails
+    upstreams               = local.upstreams
+    allowed_email_domains   = local.allowed_email_domains
+    oidc_extra_auth_params  = local.extra_auth_params
+    oidc_configured         = nonsensitive(local.oidc_ready)
+    enabled_models          = module.gateway_config.available_models
+    app_access              = var.app_access
+    app_domain              = var.app_domain
+    gateway_exposure        = var.gateway_exposure
+    gateway_hostname        = var.gateway_hostname
+    gateway_trusted_proxies = local.gateway_trusted_proxies
+    gateway_allow_cidrs     = local.gateway_allow_cidrs
+    analytics               = var.analytics
+    public_url              = local.public_url
   }
 }

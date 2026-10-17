@@ -2,9 +2,17 @@ terraform {
   required_version = ">= 1.5"
 
   required_providers {
+    # >= 7.30: google_cloud_run_v2_service.iap_enabled (IAP directly on Cloud Run, used by app_access = "iap") exists in the
+    # GA provider only from about 7.30 on (6.50 has it in google-beta only). If you already have a state from 6.x, run
+    # `terraform init -upgrade` once and read the plan before applying (docs/DEPLOY.md).
     google = {
       source  = "hashicorp/google"
-      version = "~> 6.0"
+      version = "~> 7.30"
+    }
+    # Self-signed CA and leaf certificate for the internal load balancer (gateway_tls.mode = "self_signed").
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
     }
     random = {
       source  = "hashicorp/random"

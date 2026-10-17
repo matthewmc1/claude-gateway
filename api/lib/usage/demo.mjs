@@ -32,11 +32,15 @@ function shape(hr, [s, e]) {
 export async function create(cfg, { store, aggregator, now = () => Date.now(), seed = SEED } = {}) {
   const models = (cfg.catalog?.models || []).filter((m) => m.alias && m.id);
   const byAlias = new Map(models.map((m) => [m.alias, m]));
+  // A profile says "sonnet"/"opus"/"haiku" (the family). Engineers get the entry that PINS that family (Sonnet 5.5 normally, 4.6 once an admin
+  // runs the 4.6-default recipe), so the demo traffic follows the pin; a catalog without pin information falls back to the alias itself.
+  const pinned = new Map(models.filter((m) => m.pinned === true && m.family).map((m) => [m.family, m]));
+  const entryFor = (a) => pinned.get(a) || byAlias.get(a);
   const fallback = byAlias.get(cfg.catalog?.default) || models[0] || { alias: 'sonnet', id: 'claude-sonnet-5-5', tier: 'default' };
-  const latencyOf = (m) => MEDIAN_MS[m.alias] ?? TIER_MS[m.tier] ?? 2300;
+  const latencyOf = (m) => MEDIAN_MS[m.alias] ?? MEDIAN_MS[m.family] ?? TIER_MS[m.tier] ?? 2300;
   // Profile mix (by alias) -> [{ m, cum }] over the models this catalog actually has.
   const mixes = new Map(DEMO_USERS.map((u) => {
-    const parts = Object.entries(u.profile.mix).filter(([a, p]) => p > 0 && byAlias.has(a)).map(([a, p]) => [byAlias.get(a), p]);
+    const parts = Object.entries(u.profile.mix).filter(([a, p]) => p > 0 && entryFor(a)).map(([a, p]) => [entryFor(a), p]);
     const total = parts.reduce((s, [, p]) => s + p, 0) || 1; let acc = 0;
     return [u.sub, parts.length ? parts.map(([m, p]) => ({ m, cum: (acc += p / total) })) : [{ m: fallback, cum: 1 }]];
   }));
@@ -67,7 +71,7 @@ export async function create(cfg, { store, aggregator, now = () => Date.now(), s
 
   // A few load-test bursts (a team checking capacity), attributed to one demo user and flagged so the "real" filter excludes them.
   function loadTests(tNow) {
-    const u = DEMO_USERS.find((x) => x.sub === 'demo-ivo') || DEMO_USERS.at(-1), m = byAlias.get('sonnet') || fallback, r = prng(`${seed}|loadtest`), out = [];
+    const u = DEMO_USERS.find((x) => x.sub === 'demo-ivo') || DEMO_USERS.at(-1), m = entryFor('sonnet') || fallback, r = prng(`${seed}|loadtest`), out = [];
     const today = Math.floor(tNow / DAY) * DAY;
     for (const back of [9, 4, 1]) for (let i = 0; i < 12; i++) {
       const throttled = i === 7, ms = 400 + Math.floor(r() * 500);

@@ -22,10 +22,17 @@ locals {
   app_svc = google_cloud_run_v2_service.app.name
   sql_id  = "${var.project_id}:${google_sql_database_instance.main.name}"
 
-  log_gw  = "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${local.gw_svc}\""
-  log_app = "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${local.app_svc}\""
+  # Cloud Logging evaluates OR before AND ("NOT, then OR, then AND": logging query language), so an unparenthesised
+  # `a AND b OR c AND d` means `a AND (b OR c) AND d` and matches nothing. Rule used below: a group never mixes AND with OR except
+  # through further parentheses, and the pieces joined with OR are each ONE parenthesised group (terraform/tests/run.sh parses and
+  # evaluates every filter to prove it). log_gw and log_app_service stay plain AND chains (the trial filters are unchanged).
+  log_gw          = "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${local.gw_svc}\""
+  log_app_service = "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${local.app_svc}\""
+  # app_access = "iap": the tick (and so every override.* / tick.* / usage.ingest.* event) is logged by the Cloud Run JOB, not the service.
+  log_tick_job = "(resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"${local.tick_job_name}\")"
+  log_app      = local.app_iap ? "((${local.log_app_service}) OR ${local.log_tick_job})" : local.log_app_service
 
-  log_metrics = {
+  log_metrics = merge({
     claude_gateway_upstream_errors = {
       description = "Upstream provider errors seen by the gateway (4xx/5xx from Vertex, or an inference event with status >= 500)."
       filter      = "${local.log_gw} AND (textPayload=~\"upstream [45][0-9][0-9]\" OR (jsonPayload.evt=\"inference\" AND jsonPayload.status>=500))"
@@ -84,7 +91,7 @@ locals {
     }
     claude_app_tick_error = {
       description = "tick.error: the scheduler tick failed inside the app."
-      filter      = "${local.log_app} AND jsonPayload.evt=\"tick.error\""
+      filter      = local.app_iap ? "${local.log_app} AND (jsonPayload.evt=\"tick.error\" OR (jsonPayload.evt=\"tick.job\" AND jsonPayload.ok=false) OR (${local.log_tick_job} AND severity>=ERROR))" : "${local.log_app} AND jsonPayload.evt=\"tick.error\""
     }
     claude_app_usage_ingest_error = {
       description = "usage.ingest.error: usage ingest from the gateway's logs failed."
@@ -92,13 +99,21 @@ locals {
     }
     claude_app_tick = {
       description = "tick: one authorised scheduler tick was processed by the app (the heartbeat the tick-missing alert watches)."
-      filter      = "${local.log_app} AND jsonPayload.evt=\"tick\""
+      filter      = local.app_iap ? "${local.log_tick_job} AND jsonPayload.evt=\"tick.job\" AND jsonPayload.phase=\"done\"" : "${local.log_app} AND jsonPayload.evt=\"tick\""
     }
     claude_scheduler_failures = {
       description = "Failed Cloud Scheduler attempts of the budget tick job."
       filter      = "resource.type=\"cloud_scheduler_job\" AND resource.labels.job_id=\"${google_cloud_scheduler_job.tick.name}\" AND severity>=ERROR"
     }
-  }
+    }, local.gateway_lb ? {
+    # gateway_exposure = "internal_lb": the invoker IAM check is off, so the gateway's own address checks are the last line. The gateway logs
+    # (and audits) access.public_client once per process when a request arrives from outside the private ranges (RFC1918, CGNAT, loopback,
+    # ULA): something reached it that should not have, or listen.trusted_proxies is wrong.
+    claude_gateway_public_client = {
+      description = "The gateway saw a client address outside the private ranges (evt=access.public_client; logged once per process)."
+      filter      = "${local.log_gw} AND jsonPayload.evt=\"access.public_client\""
+    }
+  } : {})
 
   # Only when the gateway can actually scale (max > min): fires when it has been at its ceiling for 10 minutes, which is when
   # Cloud Run starts answering 429.
@@ -217,7 +232,7 @@ locals {
       period    = 600
       duration  = 0
       threshold = local.th.scheduler_failures
-      doc       = "The Cloud Scheduler job ${google_cloud_scheduler_job.tick.name} failed more than ${local.th.scheduler_failures} times in 10 minutes, so budget overrides are not being applied or reverted and usage is not being ingested. Check the app's logs and that claude-scheduler still has run.invoker on claude-budget-app."
+      doc       = "The Cloud Scheduler job ${google_cloud_scheduler_job.tick.name} failed more than ${local.th.scheduler_failures} times in 10 minutes, so budget overrides are not being applied or reverted and usage is not being ingested. ${local.app_iap ? "Check the Cloud Run job ${local.tick_job_name} (gcloud run jobs executions list --job=${local.tick_job_name}) and that claude-scheduler still has run.invoker on that job." : "Check the app's logs and that claude-scheduler still has run.invoker on claude-budget-app."}"
     }
   }
 }
@@ -226,7 +241,7 @@ locals {
 # alert_thresholds keys hold N. Runbook for the boost alerts: docs/DEPLOY.md ("Budget boosts: when an alert fires").
 locals {
   boost_runbook = "Runbook: open the budget app, Activity page, and compare each ACTIVE boost's personal cap with its target (the cap it should have been raised to); a boost that is past its end must be cancelled there, which restores the previous limit, or the cap fixed by hand. Logs: claude-budget-app, jsonPayload.evt."
-  app_event_alerts = {
+  app_event_alerts = merge({
     override-overdue = {
       name      = "Claude budget app: boost overdue, cap NOT restored"
       metric    = ["claude_app_override_overdue"]
@@ -283,7 +298,16 @@ locals {
       severity  = "ERROR"
       doc       = "${local.th.tick_errors} or more tick.error or usage.ingest.error events in 15 minutes: the scheduler tick or the usage ingest is failing inside the app, so boosts may not be applied or reverted and usage views go stale. Check the app's logs for the error text, the gateway's availability and the app's access to Cloud Logging."
     }
-  }
+    }, local.gateway_lb ? {
+    gateway-public-client = {
+      name      = "Claude gateway: request from a non-private address"
+      metric    = ["claude_gateway_public_client"]
+      period    = 3600
+      min_count = 1
+      severity  = "ERROR"
+      doc       = "The gateway logged access.public_client: a request reached it from an address outside the private ranges (the gateway logs this once per process, so a single event matters). With the internal load balancer the invoker IAM check is OFF and only the network, the ingress setting and the gateway's own sign-in protect it. Read the event's client_ip: if it is the load balancer's own address, listen.trusted_proxies does not cover it (check lb_subnet_cidr and proxy_only_subnet_cidr); if it is a real public address, something in front of the gateway is exposing it: close that path and set gateway_allow_cidrs."
+    }
+  } : {})
 }
 
 resource "google_monitoring_alert_policy" "app_events" {
@@ -359,7 +383,7 @@ resource "google_monitoring_alert_policy" "tick_missing" {
   }
 
   documentation {
-    content   = "The budget app has logged no scheduler tick (evt=tick) for ${local.th.tick_missing_minutes} minutes although the job ${google_cloud_scheduler_job.tick.name} runs every minute. Budget boosts are not being applied or restored and usage is not being ingested. Check the scheduler job (paused? failing: see the scheduler-failure alert), that claude-scheduler still has run.invoker on the app, and that the app's SCHEDULER_AUDIENCE matches the job's audience. ${local.boost_runbook}"
+    content   = "The budget app has logged no scheduler tick (evt=tick${local.app_iap ? ", or with IAP the Cloud Run job's evt=tick.job" : ""}) for ${local.th.tick_missing_minutes} minutes although the job ${google_cloud_scheduler_job.tick.name} runs every minute. Budget boosts are not being applied or restored and usage is not being ingested. Check the scheduler job (paused? failing: see the scheduler-failure alert), ${local.app_iap ? "and that claude-scheduler still has run.invoker on the Cloud Run job ${local.tick_job_name} (there is no SCHEDULER_AUDIENCE with IAP: the scheduler calls the Run API with an OAuth token)." : "that claude-scheduler still has run.invoker on the app, and that the app's SCHEDULER_AUDIENCE matches the job's audience."} ${local.boost_runbook}"
     mime_type = "text/markdown"
   }
 
@@ -460,6 +484,42 @@ resource "google_monitoring_alert_policy" "gateway_down" {
 
   documentation {
     content   = "No instance of the gateway reported for 10 minutes although min instances is ${local.gateway_min_instances}. Look at the latest revision's logs: a bad image tag, a missing secret or a Cloud SQL connection problem keeps it from starting."
+    mime_type = "text/markdown"
+  }
+}
+
+# app_access = "iap": the tick is a Cloud Run job that exits 1 when the overrides tick or the usage ingest fails. Cloud Run counts failed
+# executions itself (this also catches a job that crashed before it could log). "N or more in 15 minutes" is a threshold of N - 1.
+resource "google_monitoring_alert_policy" "tick_job_failed" {
+  count        = var.enable_monitoring && local.app_iap ? 1 : 0
+  display_name = "Claude budget app: tick job failing"
+  combiner     = "OR"
+  enabled      = true
+
+  notification_channels = [for c in google_monitoring_notification_channel.email : c.id]
+
+  conditions {
+    display_name = "Failed tick job executions"
+    condition_threshold {
+      filter          = "metric.type=\"run.googleapis.com/job/completed_execution_count\" AND resource.type=\"cloud_run_job\" AND resource.labels.job_name=\"${local.tick_job_name}\" AND metric.labels.result=\"failed\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = local.th.tick_errors - 1
+      duration        = "0s"
+
+      aggregations {
+        alignment_period     = "900s"
+        per_series_aligner   = "ALIGN_SUM"
+        cross_series_reducer = "REDUCE_SUM"
+      }
+    }
+  }
+
+  alert_strategy {
+    auto_close = "3600s"
+  }
+
+  documentation {
+    content   = "${local.th.tick_errors} or more executions of the Cloud Run job ${local.tick_job_name} failed in 15 minutes (it exits 1 when the budget-override tick or the usage ingest fails, or on a bad configuration), so boosts may not be applied or reverted and usage views go stale. Read the job's logs (evt=tick.job, ok=false) in Cloud Logging. ${local.boost_runbook}"
     mime_type = "text/markdown"
   }
 }

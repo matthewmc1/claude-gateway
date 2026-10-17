@@ -1,5 +1,5 @@
 // A fake Vertex AI publisher endpoint (the only upstream the gateway talks to when load_test_mode is off). Scripted per model:
-//   claude-opus-5-5  -> 429 RESOURCE_EXHAUSTED   claude-haiku-5-5 -> 403 PERMISSION_DENIED   anything else -> a normal Messages reply
+//   any opus model (5.5, 4.6) -> 429 RESOURCE_EXHAUSTED   any haiku model -> 403 PERMISSION_DENIED   anything else (sonnet 5.5, sonnet 4.6) -> a normal Messages reply
 // The gateway reaches it through ANTHROPIC_VERTEX_BASE_URL (read by the Vertex SDK it embeds). Loopback only.
 import http from 'node:http';
 

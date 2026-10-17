@@ -8,8 +8,9 @@ try { cfg = loadConfig(); } catch (e) { console.error(String(e.message || e)); p
 
 const app = createApp(cfg, await buildDeps(cfg));
 app.server.listen(cfg.port, cfg.host, () => {
-  console.log(JSON.stringify({ evt: 'listening', host: cfg.host, port: cfg.port, demo: cfg.demo, usage: cfg.usageSource, viewAccess: cfg.viewAccess, accounts: app.auth.accounts }));
+  console.log(JSON.stringify({ evt: 'listening', host: cfg.host, port: cfg.port, demo: cfg.demo, auth: cfg.authMode, usage: cfg.usageSource, viewAccess: cfg.viewAccess, accounts: app.auth.accounts }));
 });
+for (const w of cfg.catalog.warnings || []) console.warn(JSON.stringify({ evt: 'catalog.warning', warning: w }));
 app.server.on('error', (e) => { console.error('server error:', e.message); process.exit(1); });
 
 let stopping = false;

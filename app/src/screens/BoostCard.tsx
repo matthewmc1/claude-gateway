@@ -28,7 +28,7 @@ const Field = ({ label, children }: { label: string; children: React.ReactNode }
 
 /** Admin action: raise a person's cap for a while. The backend restores their previous limit automatically when the window ends. */
 export function BoostCard({ d, onChanged }: { d: DetailRes; onChanged: () => void | Promise<void> }) {
-  const { t } = useTheme(); const toast = useToast(); const { admin, runAdmin, health } = useAuth();
+  const { t } = useTheme(); const toast = useToast(); const { admin, runAdmin, health, iap } = useAuth();
   const [period, setPeriod] = useState<Period>('weekly');
   const [preset, setPreset] = useState<number | 'custom'>(50);
   const [customExtra, setCustomExtra] = useState('');
@@ -89,7 +89,7 @@ export function BoostCard({ d, onChanged }: { d: DetailRes; onChanged: () => voi
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <Icon name="bolt" size={18} color={t.accent} />
           <Txt v="h3">Temporary boost</Txt>
-          <AdminTag signedIn={!!admin} />
+          <AdminTag signedIn={!!admin} iap={iap} />
           {live ? <Chip label={`${live} live`} color={t.good} /> : null}
           {overdue ? <Chip label={`${overdue} overdue`} color={t.crit} icon="alert" /> : null}
         </View>
@@ -151,8 +151,9 @@ export function BoostCard({ d, onChanged }: { d: DetailRes; onChanged: () => voi
       </View>
 
       {err ? <View accessibilityRole="alert" style={{ flexDirection: 'row', gap: 8, alignItems: 'flex-start' }}><Icon name="alert" size={15} color={t.crit} /><Txt v="small" color={t.crit} style={{ flex: 1 }}>{err}</Txt></View> : null}
-      {!err && problem && blocked ? <Txt v="small" color={t.muted}>{problem}</Txt> : null}
-      <Button kind="primary" icon={admin ? 'bolt' : 'lock'} label={admin ? 'Grant boost' : 'Sign in to grant boost'} busy={busy} disabled={!!problem && (blocked || extraCents === null || days === null)} onPress={submit} />
+      {iap && !admin ? <Txt v="small" color={t.muted} accessibilityRole="alert">Only admins can grant boosts. Ask an admin to do it for you.</Txt> : null}
+      {!(iap && !admin) && !err && problem && blocked ? <Txt v="small" color={t.muted}>{problem}</Txt> : null}
+      <Button kind="primary" icon={admin ? 'bolt' : 'lock'} label={admin ? 'Grant boost' : iap ? 'Admins only' : 'Sign in to grant boost'} busy={busy} disabled={(iap && !admin) || (!!problem && (blocked || extraCents === null || days === null))} onPress={submit} />
 
       <View style={{ gap: 2 }}>
         <Txt v="label" style={{ marginBottom: 4 }}>Boosts for {name}</Txt>

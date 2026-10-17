@@ -25,7 +25,7 @@ const MAX_WORK = 4, RESERVED_WORK = 1, ANON_QUEUE = 48, ADMIN_QUEUE = 16;   // o
 const LONG_TARGET = 2048;
 const HOST_RE = /^(?:\[([0-9a-f:.]+)\]|([a-z0-9-]+(?:\.[a-z0-9-]+)*))(?::([0-9]{1,5}))?$/i;
 const LAZY_TICK_MS = 30e3, TIMER_TICK_MS = 60e3;
-const API_HEADERS = { 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer', 'content-security-policy': "default-src 'none'; frame-ancestors 'none'" };
+const API_HEADERS = { 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer', 'cross-origin-resource-policy': 'same-origin', 'content-security-policy': "default-src 'none'; frame-ancestors 'none'" };
 
 const cents = (v) => (v === null || v === undefined ? null : Number(v));
 const zeros = (n) => Array(n).fill(0);
@@ -335,7 +335,7 @@ export function createApp(cfg, deps = {}) {
   async function modelsList(q) {
     const w = win(q);
     const c = await usage.company(w);
-    return { demo: cfg.demo, default: cfg.catalog.default, models: cfg.catalog.models, usage: c.byModel.map((m) => ({ model: m.model, requests: m.requests, ok: m.ok })) };
+    return { demo: cfg.demo, default: cfg.catalog.default, models: cfg.catalog.models, warnings: cfg.catalog.warnings || [], usage: c.byModel.map((m) => ({ model: m.model, requests: m.requests, ok: m.ok })) };
   }
 
   async function auditList(q) {
@@ -405,7 +405,7 @@ export function createApp(cfg, deps = {}) {
     const m = HOST_RE.exec(String(hostHeader || ''));
     if (!m) return false;
     if (m[3] !== undefined && (Number(m[3]) < 1 || Number(m[3]) > 65535)) return false;
-    if (m[1] !== undefined) return m[1] === '::1';
+    if (m[1] !== undefined) return m[1] === '::1' && cfg.loopbackHosts !== false;
     const host = m[2].toLowerCase();
     return cfg.allowedHosts.has(host) || suffixes.some((x) => host.endsWith(x) && host.length > x.length);
   };
@@ -414,6 +414,20 @@ export function createApp(cfg, deps = {}) {
     return req.socket?.remoteAddress || 'unknown';
   };
   const originOk = (origin, hostHeader) => cfg.devOrigins.has(origin) || cfg.allowedOrigins.has(origin) || origin === `http://${hostHeader}` || origin === `https://${hostHeader}`;
+  // iap mode. The IAP cookie is ambient, so a forged cross-site request would carry a valid JWT. Fetch metadata first, for EVERY /api request:
+  // a browser that says cross-site or same-site is refused (reads included: no probing for who exists, no cross-site timing). `none` (typed
+  // URL, bookmark) and `same-origin` pass; an absent header means a non-browser caller or an old browser and is judged by the write rule below.
+  const fetchSiteOk = (req) => { const sfs = req.headers['sec-fetch-site']; return sfs === undefined || sfs === 'same-origin' || sfs === 'none'; };
+  // Every non-GET also needs a custom header (forces a CORS preflight we never grant) AND at least one browser-supplied same-origin proof:
+  // an Origin equal to https://<Host> or allow-listed (http://<Host> only off Cloud Run), or Sec-Fetch-Site: same-origin. A wrong Origin
+  // fails even when Sec-Fetch-Site looks fine. A request with neither proof is not a browser page of ours.
+  const csrfOk = (req) => {
+    if (req.headers['x-app-csrf'] !== '1' || !fetchSiteOk(req)) return false;
+    const o = req.headers.origin, host = String(req.headers.host || '').toLowerCase();
+    const originMatches = o !== undefined && (cfg.allowedOrigins.has(o) || o === `https://${host}` || (!cfg.inCloud && o === `http://${host}`));
+    if (o !== undefined && !originMatches) return false;
+    return originMatches || req.headers['sec-fetch-site'] === 'same-origin';
+  };
 
   async function route(req, res, url, cors) {
     const r = url.pathname, q = url.searchParams, method = req.method;
@@ -424,8 +438,10 @@ export function createApp(cfg, deps = {}) {
     if (r === '/api/health' && method === 'GET') {
       const [g, info] = await Promise.all([gatewayUp(), usageInfo()]);
       const a = auth.optionalAdmin(req);
-      return reply(200, { gateway: g, usage: info, demo: cfg.demo, accounts: auth.accounts, viewAccess: cfg.viewAccess, maxOverrideDays: cfg.maxOverrideDays, admin: a ? { email: a.email, name: a.name } : null });
+      return reply(200, { gateway: g, usage: info, demo: cfg.demo, accounts: auth.accounts, viewAccess: cfg.viewAccess, maxOverrideDays: cfg.maxOverrideDays, admin: a ? { email: a.email, name: a.name } : null,
+        auth: auth.mode, identity: auth.whoami(req) });
     }
+    if ((r === '/api/login' || r === '/api/logout') && auth.mode === 'iap') throw new HttpError(410, 'password sign-in is turned off: this deployment uses your company sign-in (IAP)');
     if (r === '/api/login' && method === 'POST') {
       let out;
       try { out = auth.login(await readJson(req), { ip: clientIp(req) }); } catch (e) { if (e?.delayMs) await sleep(e.delayMs); throw e; }
@@ -502,10 +518,12 @@ export function createApp(cfg, deps = {}) {
       const target = req.url;
       if (typeof target !== 'string' || target.length > LONG_TARGET || target[0] !== '/' || target[1] === '/' || /[\\\s\u0000-\u001f\u007f]/.test(target)) return send(res, 400, { error: 'bad request' }, API_HEADERS);
       try { url = new URL(target, 'http://x'); } catch { return send(res, 400, { error: 'bad request' }, API_HEADERS); }
+      // Liveness for probes: no auth, no host check (probes carry the instance address), nothing to read.
+      if (url.pathname === '/healthz' && (req.method === 'GET' || req.method === 'HEAD')) { res.writeHead(200, { 'content-type': 'text/plain', 'cache-control': 'no-store' }); return res.end(req.method === 'HEAD' ? undefined : 'ok\n'); }
       if (!hostOk(req.headers.host)) return send(res, 400, { error: 'bad host' }, API_HEADERS);   // DNS-rebinding guard
       const origin = req.headers.origin;
       if (origin && cfg.devOrigins.has(origin)) {
-        cors = { 'access-control-allow-origin': origin, 'access-control-allow-headers': 'authorization, x-app-token, content-type',
+        cors = { 'access-control-allow-origin': origin, 'access-control-allow-headers': 'authorization, x-app-token, x-app-csrf, content-type',
           'access-control-allow-methods': 'GET,PUT,POST,DELETE,OPTIONS', vary: 'origin' };
       }
       if (req.method === 'OPTIONS') { res.writeHead(204, { ...API_HEADERS, ...cors }); return res.end(); }
@@ -516,6 +534,12 @@ export function createApp(cfg, deps = {}) {
         return serveStatic(cfg.dist, res, p);
       }
       if (origin && !originOk(origin, req.headers.host)) throw new HttpError(403, 'cross-origin request refused');
+      if (auth.mode === 'iap') {
+        if (!fetchSiteOk(req)) throw new HttpError(403, 'cross-site request refused');
+        // The signed IAP JWT is the perimeter: with none (or a bad one) nobody gets anything, not even open-view data.
+        if (!(await auth.identify(req))) throw new HttpError(401, 'not signed in through your company sign-in (IAP), or this account is not allowed');
+        if (req.method !== 'GET' && req.method !== 'HEAD' && !csrfOk(req)) throw new HttpError(403, 'cross-site or non-browser request refused');
+      }
       lazyTick();
       await route(req, res, url, cors);
     } catch (e) {

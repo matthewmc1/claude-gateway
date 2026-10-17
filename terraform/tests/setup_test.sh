@@ -54,8 +54,8 @@ unhcl() { python3 -I -c 'import sys,json,re;t=open(sys.argv[1]).read();m=re.sear
 # ============================================================================================================================
 echo; echo "== interactive wizard (scripted stdin)"
 fresh wiz
-# answers: project (Enter = gcloud's), region, admins, domains (Enter = first admin's), profile (no default: 'trial'), url, workspace, client id, secret, state bucket (Enter = <project>-tfstate), confirm
-printf '%s\n' '' '' 'Alice@Example.com, bob@example.com' '' 'trial' '' '' "$CLIENT" "$SECRET" '' '' >"$SCR/wiz.in"
+# answers: project (Enter = gcloud's), region, admins, domains (Enter = first admin's), profile (no default: 'trial'), topology (Enter = trial), url, workspace, client id, secret, state bucket (Enter = <project>-tfstate), confirm
+printf '%s\n' '' '' 'Alice@Example.com, bob@example.com' '' 'trial' '' '' '' "$CLIENT" "$SECRET" '' '' >"$SCR/wiz.in"
 SETUP_SKIP_VALIDATE=1 "$SETUP" --out-dir "$OUT" <"$SCR/wiz.in" >"$SCR/wiz.out" 2>"$SCR/wiz.err"; rc=$?
 cat "$SCR/wiz.out" "$SCR/wiz.err" >"$SCR/wiz.all"
 check "wizard exits 0" "[[ $rc == 0 ]]"
@@ -72,18 +72,19 @@ check "the secret is not in terraform.tfvars" "! grep -qF -- 'ZZ9' '$OUT/terrafo
 check "the secret never appears in stdout or stderr" "! grep -qF -- 'ZZ9' '$SCR/wiz.all' && ! grep -qF -- 'ord\${x}' '$SCR/wiz.all'"
 check "the summary shows the secret as hidden" "grep -q 'oauth client secret   (hidden)' '$SCR/wiz.out'"
 check "next commands are printed" "grep -q 'terraform init' '$SCR/wiz.out' && grep -q 'build-push.sh' '$SCR/wiz.out' && grep -q 'oidc_setup_steps' '$SCR/wiz.out'"
+check "trial topology: the next commands say terraform init -upgrade (the repo's old lock file pins google 6.x and plain init fails) and explain the lock file" "grep -q 'terraform init -upgrade' '$SCR/wiz.out' && grep -q 'lock file' '$SCR/wiz.out' && grep -q 'providers lock' '$SCR/wiz.out'"
 check "only the three expected files were written" "[[ \$(ls -A '$OUT' | sort | tr '\n' ' ') == 'backend.tf secrets.auto.tfvars terraform.tfvars ' ]]"
 check "the default state bucket is <project>-tfstate and backend.tf is a gcs backend" "grep -q 'backend \"gcs\"' '$OUT/backend.tf' && grep -q 'bucket = \"stub-project-123-tfstate\"' '$OUT/backend.tf' && grep -q 'prefix = \"claude-gateway\"' '$OUT/backend.tf'"
 check "the wizard did not create a bucket by itself (no gcloud storage call)" "[[ ! -e '$W/gcloud.calls' ]]"
 check "terraform.tfvars never carries the profile silently: it is written explicitly" "grep -q '^profile    = \"trial\"' '$OUT/terraform.tfvars'"
 
 echo; echo "== refusing to overwrite, backups"
-printf '%s\n' '' '' 'carol@example.com' '' 'trial' '' '' '' 'none' '' 'n' >"$SCR/ow.in"   # blank client id; confirm Y by default; then answer "n" to replace
+printf '%s\n' '' '' 'carol@example.com' '' 'trial' '' '' '' '' 'none' '' 'n' >"$SCR/ow.in"   # blank client id; confirm Y by default; then answer "n" to replace
 before="$(cksum <"$OUT/terraform.tfvars")"
 SETUP_SKIP_VALIDATE=1 "$SETUP" --out-dir "$OUT" <"$SCR/ow.in" >"$SCR/ow.out" 2>"$SCR/ow.err"; rc=$?
 # answers consumed: project region admins domains profile url workspace clientid statebucket(none) | confirm(Enter=Y) | replace? -> 'n'
 check "declining the overwrite prompt exits non-zero and leaves the file untouched" "[[ $rc != 0 && \"\$(cksum <'$OUT/terraform.tfvars')\" == '$before' ]]"
-printf '%s\n' '' '' 'carol@example.com' '' 'trial' '' '' '' 'none' '' 'y' >"$SCR/ow2.in"
+printf '%s\n' '' '' 'carol@example.com' '' 'trial' '' '' '' '' 'none' '' 'y' >"$SCR/ow2.in"
 SETUP_SKIP_VALIDATE=1 "$SETUP" --out-dir "$OUT" <"$SCR/ow2.in" >"$SCR/ow2.out" 2>"$SCR/ow2.err"; rc=$?
 check "accepting the overwrite prompt replaces it" "[[ $rc == 0 ]] && grep -q 'carol@example.com' '$OUT/terraform.tfvars' && ! grep -q 'alice@example.com' '$OUT/terraform.tfvars'"
 check "a backup of the old terraform.tfvars is kept" "ls '$OUT'/terraform.tfvars.bak-* >/dev/null 2>&1 && grep -q 'alice@example.com' '$OUT'/terraform.tfvars.bak-*"
@@ -135,15 +136,15 @@ check "the bucket is created versioned, uniform-access, public-access-prevented,
 check "backend.tf was written too" "grep -q 'acme-tfstate-7' '$OUT/backend.tf'"
 
 fresh bk4; rm -f "$W/gcloud.calls"
-printf '%s\n' '' 'carol@example.com' '' 'trial' '' '' '' '' 'no' >"$SCR/bk4.in"     # (project given by flag) region admins domains profile url ws client | confirm | "no"
+printf '%s\n' '' 'carol@example.com' '' 'trial' '' '' '' '' '' 'no' >"$SCR/bk4.in"     # (project given by flag) region admins domains profile topology url ws client | confirm | "no"
 SETUP_SKIP_VALIDATE=1 "$SETUP" --create-state-bucket --project ci-project-1 --out-dir "$OUT" <"$SCR/bk4.in" >"$SCR/bk4.out" 2>&1; rc=$?
 check "interactive: anything but 'yes' skips the bucket commands" "[[ $rc == 0 && -z \"\$(calls)\" ]] && grep -q 'skipped' '$SCR/bk4.out' && grep -q 'ci-project-1-tfstate' '$OUT/backend.tf'"
 fresh bk5; rm -f "$W/gcloud.calls"
-printf '%s\n' '' 'carol@example.com' '' 'trial' '' '' '' '' 'y' >"$SCR/bk5.in"
+printf '%s\n' '' 'carol@example.com' '' 'trial' '' '' '' '' '' 'y' >"$SCR/bk5.in"
 SETUP_SKIP_VALIDATE=1 "$SETUP" --create-state-bucket --project ci-project-1 --out-dir "$OUT" <"$SCR/bk5.in" >"$SCR/bk5.out" 2>&1
 check "interactive: 'y' is not enough, only the word yes" "[[ -z \"\$(calls)\" ]]"
 fresh bk6; rm -f "$W/gcloud.calls"
-printf '%s\n' '' 'carol@example.com' '' 'trial' '' '' '' '' 'yes' >"$SCR/bk6.in"
+printf '%s\n' '' 'carol@example.com' '' 'trial' '' '' '' '' '' 'yes' >"$SCR/bk6.in"
 SETUP_SKIP_VALIDATE=1 "$SETUP" --create-state-bucket --project ci-project-1 --out-dir "$OUT" <"$SCR/bk6.in" >"$SCR/bk6.out" 2>&1; rc=$?
 check "interactive: typing yes runs both commands" "[[ $rc == 0 && \$(calls | wc -l | tr -d ' ') == 2 ]] && grep -q 'created gs://ci-project-1-tfstate' '$SCR/bk6.out'"
 
@@ -160,6 +161,33 @@ check "non-interactive without a bucket: no backend.tf, warning printed (opt-in,
 check "the real terraform/ dir got no backend.tf from the tests" "[[ ! -e '$TF_SRC/backend.tf' ]]"
 
 # ============================================================================================================================
+echo; echo "== topology: enterprise (IAP + internal load balancer)"
+fresh ent
+SETUP_SKIP_VALIDATE=1 PROJECT_ID=ent-project-1 ADMIN_EMAILS='ops@corp.example.org' PROFILE=production TOPOLOGY=enterprise GATEWAY_HOSTNAME=claude-gateway.corp.example.org \
+  APP_VIEWERS='group:eng@corp.example.org, domain:corp.example.org' ANALYTICS=bigquery "$SETUP" --non-interactive --out-dir "$OUT" >"$SCR/ent.out" 2>"$SCR/ent.err" </dev/null; rc=$?
+check "enterprise: non-interactive run succeeds" "[[ $rc == 0 ]]"
+check "enterprise: tfvars carry iap + internal_lb + hostname + viewers + analytics" "grep -q 'app_access      = \"iap\"' '$OUT/terraform.tfvars' && grep -q 'gateway_exposure = \"internal_lb\"' '$OUT/terraform.tfvars' && grep -q 'gateway_hostname = \"claude-gateway.corp.example.org\"' '$OUT/terraform.tfvars' && grep -q 'app_viewers     = \[\"group:eng@corp.example.org\", \"domain:corp.example.org\"\]' '$OUT/terraform.tfvars' && grep -q 'analytics = \"bigquery\"' '$OUT/terraform.tfvars'"
+check "enterprise: no public_url is written (it is derived)" "! grep -q '^public_url' '$OUT/terraform.tfvars'"
+check "enterprise: init -upgrade is printed too (every topology needs provider 7.30+)" "grep -q 'terraform init -upgrade' '$SCR/ent.out'"
+check "enterprise: the console-only steps are explained" "grep -q 'consent screen' '$SCR/ent.out' && grep -q 'edge_next_steps' '$SCR/ent.out' && ! grep -q 'proxy_command | sh' '$SCR/ent.out'"
+fresh entd
+SETUP_SKIP_VALIDATE=1 PROJECT_ID=ent-project-1 ADMIN_EMAILS='ops@corp.example.org' PROFILE=production "$SETUP" --non-interactive --topology enterprise-domain --gateway-hostname gw.corp.example.org --app-domain budget.corp.example.org --out-dir "$OUT" >"$SCR/entd.out" 2>"$SCR/entd.err" </dev/null; rc=$?
+check "enterprise-domain: app_domain is written" "[[ $rc == 0 ]] && grep -q 'app_domain      = \"budget.corp.example.org\"' '$OUT/terraform.tfvars'"
+fresh trialt
+SETUP_SKIP_VALIDATE=1 PROJECT_ID=ent-project-1 ADMIN_EMAILS='ops@corp.example.org' PROFILE=trial "$SETUP" --non-interactive --out-dir "$OUT" >/dev/null 2>&1 </dev/null
+check "trial (default topology): no edge variables, public_url present" "grep -q '^public_url' '$OUT/terraform.tfvars' && ! grep -q 'app_access\|gateway_exposure' '$OUT/terraform.tfvars'"
+fresh nosec
+SETUP_SKIP_VALIDATE=1 PROJECT_ID=ent-project-1 ADMIN_EMAILS='ops@corp.example.org' PROFILE=trial OIDC_CLIENT_SECRET='ZZ9-secret-without-client' "$SETUP" --non-interactive --out-dir "$OUT" >"$SCR/nosec.out" 2>"$SCR/nosec.err" </dev/null; rc=$?
+check "a client secret without a client id is not dropped silently: warning printed, nothing written, secret never echoed" "[[ $rc == 0 && ! -e '$OUT/secrets.auto.tfvars' ]] && grep -q 'secret was given without --client-id' '$SCR/nosec.err' && ! grep -rqF 'ZZ9' '$SCR/nosec.out' '$SCR/nosec.err'"
+if [[ "$FULL" == 1 ]]; then
+  fresh entc
+  SETUP_SKIP_VALIDATE=1 PROJECT_ID=ent-project-1 ADMIN_EMAILS='ops@corp.example.org' PROFILE=production TOPOLOGY=enterprise-domain GATEWAY_HOSTNAME=gw.corp.example.org APP_DOMAIN=budget.corp.example.org \
+    "$SETUP" --non-interactive --out-dir "$OUT" >/dev/null 2>&1 </dev/null
+  "$SETUP" --check "$OUT/terraform.tfvars" >"$SCR/entc.out" 2>&1; rc=$?
+  check "enterprise-domain tfvars pass the offline terraform check" "[[ $rc == 0 ]] && grep -q 'check passed' '$SCR/entc.out'"
+fi
+
+# ============================================================================================================================
 echo; echo "== invalid input is rejected before anything is written"
 fresh bad
 run_bad() {   # run_bad <description> <expected stderr text> <env assignments...> -- (runs setup non-interactively)
@@ -172,6 +200,13 @@ run_bad "bad project id" "not a Google Cloud project id" PROJECT_ID='Bad Project
 run_bad "bad client id names the console" "console.cloud.google.com/apis/credentials?project=good-project-1" PROJECT_ID=good-project-1 ADMIN_EMAILS='a@x.org' OIDC_CLIENT_ID='abc'
 run_bad "bad domain" "is not a domain" PROJECT_ID=good-project-1 ADMIN_EMAILS='a@x.org' ALLOWED_DOMAINS='@x.org'
 run_bad "bad profile" "profile must be" PROJECT_ID=good-project-1 ADMIN_EMAILS='a@x.org' PROFILE=big
+run_bad "unknown topology" "topology must be" PROJECT_ID=good-project-1 ADMIN_EMAILS='a@x.org' TOPOLOGY=cloud
+run_bad "enterprise needs a gateway hostname" "need a gateway hostname" PROJECT_ID=good-project-1 ADMIN_EMAILS='a@x.org' TOPOLOGY=enterprise
+run_bad "gateway hostname must be a DNS name (not an IP)" "must be a DNS name" PROJECT_ID=good-project-1 ADMIN_EMAILS='a@x.org' TOPOLOGY=enterprise GATEWAY_HOSTNAME=10.0.1.5
+run_bad "enterprise-domain needs an app domain" "needs an app domain" PROJECT_ID=good-project-1 ADMIN_EMAILS='a@x.org' TOPOLOGY=enterprise-domain GATEWAY_HOSTNAME=gw.corp.example.org
+run_bad "viewers: allUsers is never accepted" "is not a member like" PROJECT_ID=good-project-1 ADMIN_EMAILS='a@x.org' TOPOLOGY=enterprise GATEWAY_HOSTNAME=gw.corp.example.org APP_VIEWERS=allUsers
+run_bad "public url is derived in the enterprise topologies" "only for the trial topology" PROJECT_ID=good-project-1 ADMIN_EMAILS='a@x.org' TOPOLOGY=enterprise GATEWAY_HOSTNAME=gw.corp.example.org PUBLIC_URL=https://gw.corp.example.org
+run_bad "bad analytics" "analytics must be" PROJECT_ID=good-project-1 ADMIN_EMAILS='a@x.org' ANALYTICS=snowflake
 run_bad "bad public url" "public url must look like" PROJECT_ID=good-project-1 ADMIN_EMAILS='a@x.org' PUBLIC_URL='localhost:8891'
 for u in 'https://gw.example.com$(touch X)' 'https://ev il.com' 'https://a.com;x' 'https://a.com`id`' 'https://a.com/p' 'http://example.com' 'https://a_b.com' 'https://u@a.com' 'https://a.com:99999' "https://a.com'x"; do
   run_bad "hostile public url rejected: $u" "public url must look like" PROJECT_ID=good-project-1 ADMIN_EMAILS='a@x.org' PUBLIC_URL="$u"

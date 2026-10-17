@@ -28,6 +28,21 @@ const MODELS = [
   { alias: 'haiku', id: 'claude-haiku-5-5', label: 'Haiku 5.5', tier: 'fast', description: 'Fast and cheap for simple, high-volume tasks.', enabled: true, pricePerMTok: { input: null, output: null, cacheRead: null, cacheWrite: null } },
 ];
 if (E.MOCK_PRICES === '1') MODELS[0].pricePerMTok = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
+// What GET /api/models returns: the usage mixes above only cover the first three, the 4.6 entries are allowed but nobody has chosen them.
+// MOCK_46_DEFAULT=1 shows the catalog after the "4.6 as the default for everyone" recipe (default sonnet-4-6, 4.6 entries pin their family).
+const none = { input: null, output: null, cacheRead: null, cacheWrite: null };
+const CATALOG_MODELS = () => {
+  const r = E.MOCK_46_DEFAULT === '1';
+  // After the recipe the tiers swap with the pins (the new default is "default"/"upgrade", the replaced one "previous").
+  const tier = (m) => (r && (m.alias === 'sonnet' || m.alias === 'opus') ? 'previous' : m.tier);
+  const unpinned = E.MOCK_UNPINNED === '1';   // a legal but suspicious catalog: nothing pins the sonnet family
+  return [
+    ...MODELS.map((m) => ({ ...m, tier: tier(m), family: m.alias, pinned: unpinned && m.alias === 'sonnet' ? false : m.alias === 'haiku' || !r })),
+    { alias: 'sonnet-4-6', id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', tier: r ? 'default' : 'previous', family: 'sonnet', pinned: r, description: r ? 'Everyday coding. The baseline everyone starts on.' : 'The previous Sonnet generation, available by name.', enabled: true, pricePerMTok: none },
+    { alias: 'opus-4-6', id: 'claude-opus-4-6', label: 'Opus 4.6', tier: r ? 'upgrade' : 'previous', family: 'opus', pinned: r, description: r ? 'Hardest problems. Costs more and uses budget faster, so it is an explicit step up.' : 'The previous Opus generation, available by name.', enabled: true, pricePerMTok: none },
+  ];
+};
+const CATALOG_WARNINGS = () => (E.MOCK_UNPINNED === '1' ? ['No enabled model pins the sonnet family: sonnet, sonnet-4-6 are available by name, but the "sonnet" alias is not set for anyone, so `/model sonnet` will be refused. Set "pin": true on one sonnet entry.'] : []);
 const PEOPLE = [
   { sub: 'u-ada', email: 'ada@example.com', name: 'Ada Lovelace', mix: [0.45, 0.5, 0.05], weekly: [5000, 4650], monthly: [20000, 15200], load: 1.4, fail: 0.04 },
   { sub: 'u-grace', email: 'grace@example.com', name: 'Grace Hopper', mix: [0.8, 0.1, 0.1], weekly: [5000, 5200], monthly: [20000, 12100], load: 1.0, fail: 0.12 },
@@ -227,7 +242,7 @@ http.createServer(async (req, res) => {
     if (r === '/api/models' && isRead) {
       const rows = state.people.map((p) => userRow(p, w));
       const usage = MODELS.map((mm) => { const n = rows.reduce((a, u) => a + u._s[mm.id].reduce((x, c) => x + c, 0), 0); return { model: mm.id, requests: n, ok: Math.round(n * 0.95) }; });
-      return send(res, 200, { default: 'sonnet', models: MODELS, usage: SOURCE === 'none' ? [] : usage });
+      return send(res, 200, { default: E.MOCK_46_DEFAULT === '1' ? 'sonnet-4-6' : 'sonnet', models: CATALOG_MODELS(), warnings: CATALOG_WARNINGS(), usage: SOURCE === 'none' ? [] : usage });
     }
     if (r === '/api/audit' && isRead) return send(res, 200, { events: state.audit });
     if (r === '/api/overrides' && isRead) {

@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { normalizeCatalog } from '../../../api/lib/config.mjs';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 export const PORTS = { pg: 19160, gateway: 19161, oidc: 19162, opsGateway: 19163, appL3: 19164, appL5: 19165, fakeVertex: 19166, vertexGateway: 19167 };
@@ -15,13 +16,23 @@ export const makeSecrets = () => ({
   keys: { ada: rand(), bob: rand(), system: rand(), read: rand() },
 });
 
-export function modelPolicy() {
-  const cat = JSON.parse(fs.readFileSync(path.join(ROOT, 'config', 'models.json'), 'utf8'));
-  const enabled = cat.models.filter((m) => m.enabled !== false);
-  const ordered = [...enabled.filter((m) => m.alias === cat.default), ...enabled.filter((m) => m.alias !== cat.default)];
+// What Terraform renders into the gateway's managed policy, for a catalog (default: config/models.json). Every enabled model is allowed
+// (default first); only an entry that PINS its family (family + pin, see docs/ARCHITECTURE.md) sets ANTHROPIC_DEFAULT_<FAMILY>_MODEL.
+// The catalog is validated by the same rules the app, Terraform and the installer apply (an invalid one throws here).
+export const readCatalog = () => JSON.parse(fs.readFileSync(path.join(ROOT, 'config', 'models.json'), 'utf8'));
+export function modelPolicy(cat = readCatalog()) {
+  const c = normalizeCatalog(cat, 'config/models.json');
+  const enabled = c.models.filter((m) => m.enabled);
+  const ordered = [...enabled.filter((m) => m.alias === c.default), ...enabled.filter((m) => m.alias !== c.default)];
   const env = {};
-  for (const m of enabled) if (['sonnet', 'opus', 'haiku'].includes(m.alias.toLowerCase())) env[`ANTHROPIC_DEFAULT_${m.alias.toUpperCase()}_MODEL`] = m.id;
-  return { availableModels: ordered.map((m) => m.id), env, catalog: cat };
+  for (const m of enabled) if (m.pinned) env[`ANTHROPIC_DEFAULT_${m.family.toUpperCase()}_MODEL`] = m.id;
+  return { availableModels: ordered.map((m) => m.id), model: ordered[0].id, env, catalog: cat };   // model = the explicit starting model (default entry)
+}
+// The "run 4.6 as the default for everyone" recipe applied to a catalog.
+export function recipe46(cat = readCatalog()) {
+  const c = JSON.parse(JSON.stringify(cat)); c.default = 'sonnet-4-6';
+  for (const m of c.models) { if (m.alias === 'sonnet' || m.alias === 'opus') m.pin = false; if (m.alias === 'sonnet-4-6' || m.alias === 'opus-4-6') m.pin = true; }
+  return c;
 }
 
 export function renderGatewayYaml({ port, oidcPort, pgPort, pgPassword, db, secrets, loadTest = true }) {
@@ -61,6 +72,7 @@ managed:
       code:
         enforceAvailableModels: true
         availableModels: ${j(pol.availableModels)}
+        model: ${j(pol.model)}
         env: ${j(pol.env)}
 ${loadTest ? `load_test_mode:
   enabled: true

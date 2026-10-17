@@ -1,5 +1,6 @@
 *
 !api/server.mjs
+!api/tick.mjs
 !api/lib
 !config/models.json
 !app/dist

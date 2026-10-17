@@ -201,7 +201,9 @@ export function createGcsStore(bucket, { fetchImpl = fetch, timeoutMs = 15000 } 
   };
 }
 
+// Which backend createStore will pick: 'memory' (demo), 'gcs' (APP_STATE_BUCKET) or 'file'.
+export const storeKind = (cfg) => (cfg.demo ? 'memory' : cfg.stateBucket ? 'gcs' : 'file');
 export function createStore(cfg) {
-  if (cfg.demo) return createMemoryStore();
-  return cfg.stateBucket ? createGcsStore(cfg.stateBucket) : createFileStore(cfg.dataDir);
+  const kind = storeKind(cfg);
+  return kind === 'memory' ? createMemoryStore() : kind === 'gcs' ? createGcsStore(cfg.stateBucket) : createFileStore(cfg.dataDir);
 }

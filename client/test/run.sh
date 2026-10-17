@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Test suite for the engineer installer (client/claude-gateway-setup.sh) and scripts/package-client.sh.
-# Plain bash + python3, no other dependencies. The only network use is a fake gateway on 127.0.0.1:19380.
+# Plain bash + python3, no other dependencies. The only network use is a fake gateway on 127.0.0.1:19350.
 #
 #   client/test/run.sh          exit code 0 = everything passed
 #
@@ -16,7 +16,7 @@ mkstamped() {   # mkstamped <dir> [url]: build a company-stamped installer into 
   if [ -n "${CGS_OLD_STAMPED:-}" ]; then mkdir -p "$1"; cp "$CGS_OLD_STAMPED" "$1/claude-gateway-setup.sh"; STAMPURL="${CGS_OLD_STAMPED_URL:-https://gw.corp.example.com}"
   else "$PKG" --gateway-url "$STAMPURL" --out "$1" >/dev/null 2>&1; fi
 }
-PORT=19380; DOWN_PORT=19381
+PORT=19350; DOWN_PORT=19351
 PASS=0; FAIL=0; N=0; CUR=""
 T="$(mktemp -d "${TMPDIR:-/tmp}/cgs-test.XXXXXX")" || exit 2; T="$(cd "$T" && pwd -P)"; mkdir -p "$T/tmp" "$T/bin"
 GWPID=""
@@ -82,7 +82,7 @@ exists()   { if [ -e "$1" ]; then pass "$2"; else fail "$2 (missing $1)"; fi; }
 absent()   { if [ ! -e "$1" ]; then pass "$2"; else fail "$2 (found $1)"; fi; }
 baks()     { ls "$M"/managed-settings.json.bak.* 2>/dev/null | wc -l | tr -d ' '; }
 equal()    { if [ "$1" = "$2" ]; then pass "$3"; else fail "$3 (got '$1', wanted '$2')"; fi; }
-SONNET=claude-sonnet-5-5; OPUS=claude-opus-5-5; HAIKU=claude-haiku-5-5
+SONNET=claude-sonnet-5-5; OPUS=claude-opus-5-5; HAIKU=claude-haiku-5-5; SONNET46=claude-sonnet-4-6; OPUS46=claude-opus-4-6
 MF() { echo "$M/managed-settings.json"; }; UF() { echo "$U/settings.json"; }
 
 # ================= tests =================
@@ -103,7 +103,7 @@ json_is "$(MF)" 'd["forceLoginGatewayUrl"]' "https://gw.example.test" "policy ga
 json_is "$(MF)" 'd["forceLoginMethod"]' gateway "forceLoginMethod is gateway"
 json_is "$(MF)" 'd["parentSettingsBehavior"]' merge "parentSettingsBehavior merge"
 json_is "$(MF)" 'd["allowedProviders"]' '["gateway"]' "allowedProviders is gateway only"
-json_is "$(MF)" 'd["availableModels"]' "[\"$SONNET\", \"$OPUS\", \"$HAIKU\"]" "availableModels default-first from the catalog"
+json_is "$(MF)" 'd["availableModels"]' "[\"$SONNET\", \"$OPUS\", \"$HAIKU\", \"$SONNET46\", \"$OPUS46\"]" "availableModels default-first from the catalog"
 json_is "$(MF)" 'd["enforceAvailableModels"]' true "enforceAvailableModels"
 json_is "$(MF)" 'd["env"]' "{\"ANTHROPIC_DEFAULT_SONNET_MODEL\": \"$SONNET\", \"ANTHROPIC_DEFAULT_OPUS_MODEL\": \"$OPUS\", \"ANTHROPIC_DEFAULT_HAIKU_MODEL\": \"$HAIKU\"}" "model pins generated from the catalog"
 json_is "$(UF)" 'd["model"]' "$SONNET" "user default model is sonnet"
@@ -144,8 +144,8 @@ run install --yes --gateway-url ftp://gw.example.test; rc_fails "non-http scheme
 run install --yes --gateway-url notaurl; rc_fails "garbage refused"
 run install --yes --gateway-url https://user:pw@gw.example.test; rc_fails "credentials in URL refused"
 absent "$M" "none of the refused URLs wrote anything"
-run install --yes --gateway-url http://localhost:19380; rc_is 0 "http://localhost accepted"
-rm -rf "$M" "$U"; run install --yes --gateway-url http://127.0.0.1:19380; rc_is 0 "http://127.0.0.1 accepted"
+run install --yes --gateway-url http://localhost:19350; rc_is 0 "http://localhost accepted"
+rm -rf "$M" "$U"; run install --yes --gateway-url http://127.0.0.1:19350; rc_is 0 "http://127.0.0.1 accepted"
 rm -rf "$M" "$U"; run install --yes --gateway-url https://gw.example.test:8443; rc_is 0 "https with a port accepted"
 rm -rf "$M" "$U"; run install --yes --gateway-url https://8.8.8.8; has "public address" "public address gets a clear warning"
 rm -rf "$M" "$U"; run install --yes --gateway-url https://10.1.2.3; has "loopback/private" "private address is accepted"
@@ -206,7 +206,7 @@ d["permissions"] = {"deny": ["x"]}; json.dump(d, open(p, "w"), indent=2)
 PY
 run status; rc_fails "status fails on drift"; has "out of date" "status reports drift"; has "availableModels" "names the drifted key"; has "ANTHROPIC_DEFAULT_OPUS_MODEL" "names the drifted pin"
 run update --yes; rc_is 0 "update"; has "changed" "update lists what it changed"
-json_is "$(MF)" 'd["availableModels"]' "[\"$SONNET\", \"$OPUS\", \"$HAIKU\"]" "update restored availableModels"
+json_is "$(MF)" 'd["availableModels"]' "[\"$SONNET\", \"$OPUS\", \"$HAIKU\", \"$SONNET46\", \"$OPUS46\"]" "update restored availableModels"
 json_is "$(MF)" 'd["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"]' "$OPUS" "update restored the pin"
 json_is "$(MF)" 'd["permissions"]' '{"deny": ["x"]}' "update kept unrelated keys"
 json_is "$(MF)" 'd["forceLoginGatewayUrl"]' "http://127.0.0.1:$PORT" "update kept the installed gateway URL"
@@ -222,7 +222,7 @@ c["models"].append({"alias": "retired", "id": "claude-retired-5-5", "label": "Re
 json.dump(c, open(sys.argv[2], "w"), indent=2)
 PY
 printf '{"gatewayUrl":"https://gw.example.test"}' > "$S/defaults.json"; run install --yes; rc_is 0 "install with an extended catalog"
-json_is "$(MF)" 'd["availableModels"]' "[\"$SONNET\", \"$OPUS\", \"$HAIKU\", \"claude-mythos-5-5\"]" "new model flows into availableModels, disabled one does not"
+json_is "$(MF)" 'd["availableModels"]' "[\"$SONNET\", \"$OPUS\", \"$HAIKU\", \"$SONNET46\", \"$OPUS46\", \"claude-mythos-5-5\"]" "new model flows into availableModels, disabled one does not"
 run model mythos; rc_is 0 "model <new alias> works"; json_is "$(UF)" 'd["model"]' claude-mythos-5-5 "new model written as its id"
 run model claude-mythos-5-5; rc_is 0 "model <new id> works"
 run model retired; rc_fails "a disabled model is rejected"
@@ -273,7 +273,7 @@ rc_fails "status flags an installed gateway that differs from the installer's"; 
 fresh; run install --yes --gateway-url "http://127.0.0.1:$PORT"; printf '{ broken' > "$(MF)"; run status; rc_fails "status copes with a corrupt policy file"; has "not valid JSON"
 
 section "leftover credentials"
-fresh; EXTRA=(ANTHROPIC_API_KEY=sk-ant-FAKE-should-never-print ANTHROPIC_BASE_URL=https://x.example.test CLAUDE_CODE_USE_VERTEX=1)
+fresh; EXTRA=(ANTHROPIC_API_KEY=sk-ant-FAKE-noprint ANTHROPIC_BASE_URL=https://x.example.test CLAUDE_CODE_USE_VERTEX=1)
 run install --yes --gateway-url https://gw.example.test; rc_is 0 "install still succeeds"
 has "ANTHROPIC_API_KEY" "warns about ANTHROPIC_API_KEY"; has "ANTHROPIC_BASE_URL" "warns about ANTHROPIC_BASE_URL"; has "CLAUDE_CODE_USE_VERTEX"
 lacks "sk-ant-FAKE" "never prints the key value"
@@ -312,7 +312,7 @@ cp "$D/tampered.sh" "$P/claude-gateway-setup.sh"
 equal "$(ls "$P" | tr '\n' ' ')" "SHA256SUMS claude-gateway-setup.ps1 claude-gateway-setup.sh " "output folder holds only the three expected files"
 S="$P"; SH="$P/claude-gateway-setup.sh"; run install --yes
 rc_is 0 "packaged installer installs with no arguments and no side files"; json_is "$(MF)" 'd["forceLoginGatewayUrl"]' https://pkg.example.test "packaged URL"
-json_is "$(MF)" 'd["availableModels"]' "[\"$SONNET\", \"$OPUS\", \"$HAIKU\"]" "packaged catalog"; json_is "$(UF)" 'd["model"]' "$SONNET" "packaged default model"
+json_is "$(MF)" 'd["availableModels"]' "[\"$SONNET\", \"$OPUS\", \"$HAIKU\", \"$SONNET46\", \"$OPUS46\"]" "packaged catalog"; json_is "$(UF)" 'd["model"]' "$SONNET" "packaged default model"
 has "stamped" "says where the gateway came from"
 if grep -q 'sk-\|BEGIN .*PRIVATE' "$P/claude-gateway-setup.sh"; then fail "no secrets in the stamped file"; else pass "no secrets in the stamped file"; fi
 grep -q '^STAMP_GATEWAY_URL_B64=""' "$SRC" && pass "the source installer has no stamped URL" || fail "the source installer must keep STAMP_GATEWAY_URL_B64 empty"
@@ -326,7 +326,7 @@ printf '{"gatewayUrl":"https://should-be-ignored.example.test","model":"opus","e
 OUT="$("$PKG" --gateway-url https://pkg2.example.test --models "$D/cat.json" --defaults "$D/def.json" --out "$P" 2>&1)"; RC=$?; rc_is 0 "package with custom catalog and defaults"
 S="$P"; SH="$P/claude-gateway-setup.sh"; run install --yes
 json_is "$(MF)" 'd["forceLoginGatewayUrl"]' https://pkg2.example.test "the --gateway-url given to the packager wins over defaults.gatewayUrl"
-json_is "$(MF)" 'd["availableModels"]' "[\"$OPUS\", \"$SONNET\", \"$HAIKU\", \"claude-mythos-5-5\"]" "embedded catalog and default (opus first)"
+json_is "$(MF)" 'd["availableModels"]' "[\"$OPUS\", \"$SONNET\", \"$HAIKU\", \"$SONNET46\", \"$OPUS46\", \"claude-mythos-5-5\"]" "embedded catalog and default (opus first)"
 json_is "$(UF)" 'd["effortLevel"]' high "embedded effort"; json_is "$(UF)" 'd["cleanupPeriodDays"]' 14 "embedded userSettings"
 run model mythos; rc_is 0 "embedded catalog supports model <new>"
 fresh; P="$D/dist"
@@ -336,7 +336,7 @@ OUT="$("$PKG" --out "$P" 2>&1)"; RC=$?; rc_fails "package needs --gateway-url"
 printf '{"gatewayUrl":"","apiKey":"abc"}' > "$D/bad.json"; OUT="$("$PKG" --gateway-url https://gw.example.test --defaults "$D/bad.json" --out "$P" 2>&1)"; RC=$?; rc_fails "package refuses a defaults file with an apiKey"; has "apiKey" "[changed: now the unknown-key check fires first] and names the key"
 python3 -I -c 'import json,sys; c=json.load(open(sys.argv[1])); c["models"][0]["apiKey"]="abc"; json.dump(c,open(sys.argv[2],"w"))' "$ROOT/config/models.json" "$D/badcat.json"
 OUT="$("$PKG" --gateway-url https://gw.example.test --models "$D/badcat.json" --out "$P" 2>&1)"; RC=$?; rc_fails "package refuses a catalog that looks like it holds a secret"; has "secret"
-printf '{"userSettings":{"theme":"sk-ant-api03-abcdefghijklmnopqrstuvwxyz"}}' > "$D/bad2.json"; OUT="$("$PKG" --gateway-url https://gw.example.test --defaults "$D/bad2.json" --out "$P" 2>&1)"; RC=$?; rc_fails "package refuses a credential-looking value"
+printf '{"userSettings":{"theme":"%s"}}' "sk-ant-api03-abcdefghij""klmnopqrstuvwxyz" > "$D/bad2.json"; OUT="$("$PKG" --gateway-url https://gw.example.test --defaults "$D/bad2.json" --out "$P" 2>&1)"; RC=$?; rc_fails "package refuses a credential-looking value"
 lacks "sk-ant-api03" "and does not echo it"
 OUT="$("$PKG" --gateway-url https://gw.example.test --models "$D/nope.json" --out "$P" 2>&1)"; RC=$?; rc_fails "package refuses a missing catalog"
 absent "$P" "nothing built after refusals"
@@ -445,7 +445,7 @@ done
 [ -z "$badp" ] && pass "package-client.sh rejects every hostile gateway URL, executes nothing and builds nothing" || fail "package-client.sh must reject:$badp"
 fresh; EXTRA=(CLAUDE_GATEWAY_URL="https://gw.example.com\$(touch $INJ)"); run install --yes; rc_fails "the same validator guards CLAUDE_GATEWAY_URL"; absent "$INJ" "nothing executed"
 EXTRA=(); printf '{"gatewayUrl":"https://gw.example.com$(touch %s)"}' "$INJ" > "$S/defaults.json"; run install --yes; rc_fails "and defaults.json gatewayUrl"; absent "$INJ" "nothing executed"
-for u in https://gw-1.corp.example.com https://10.1.2.3:8443 'https://[fd00::1]:8443' http://127.0.0.1:19380 'http://[::1]:19380' https://GW.Example.COM; do
+for u in https://gw-1.corp.example.com https://10.1.2.3:8443 'https://[fd00::1]:8443' http://127.0.0.1:19350 'http://[::1]:19350' https://GW.Example.COM; do
   fresh; run install --yes --gateway-url "$u"; rc_is 0 "valid form accepted: $u"
 done
 fresh; P="$D/dist"; "$PKG" --gateway-url https://pkg3.example.test --out "$P" >/dev/null 2>&1
@@ -557,6 +557,162 @@ if command -v openssl >/dev/null 2>&1 && [ -f "$T/k1.pem" ]; then
   OUT="$("$PKG" --gateway-url https://gw.example.test --sign-key "$T/k1.pem" --out "$P" 2>&1)"; RC=$?; exists "$P/claude-gateway-setup.sh.sig" "signed build has a signature"
   OUT="$("$PKG" --gateway-url https://gw2.example.test --out "$P" 2>&1)"; RC=$?; absent "$P/claude-gateway-setup.sh.sig" "a later unsigned build does not keep the old signature"
 fi
+
+section "models: Claude 4.6 in the catalog, family/pin rules, the 4.6-default recipe"
+catmod() { python3 -I -c 'import json,sys; c=json.load(open(sys.argv[1])); exec(sys.argv[3]); json.dump(c,open(sys.argv[2],"w"))' "$ROOT/config/models.json" "$2" "$1"; }
+RECIPE='c["default"]="sonnet-4-6"
+for m in c["models"]:
+    if m["alias"] in ("sonnet", "opus"): m["pin"]=False
+    if m["alias"] in ("sonnet-4-6", "opus-4-6"): m["pin"]=True'
+fresh; printf '{"gatewayUrl":"http://127.0.0.1:%s"}' "$PORT" > "$S/defaults.json"; run install --yes; rc_is 0 "install with the shipped catalog"
+json_is "$(MF)" 'sorted(d["env"].items())' "[[\"ANTHROPIC_DEFAULT_HAIKU_MODEL\", \"$HAIKU\"], [\"ANTHROPIC_DEFAULT_OPUS_MODEL\", \"$OPUS\"], [\"ANTHROPIC_DEFAULT_SONNET_MODEL\", \"$SONNET\"]]" "4.6 entries are allowed but not pinned: the pins stay on 5.5"
+run model sonnet-4-6; rc_is 0 "model sonnet-4-6"; json_is "$(UF)" 'd["model"]' "$SONNET46" "model <4.6 alias> writes the id (the setting the model command always uses)"
+has "Sonnet 4.6" "names the model"; has "earlier model generation" "explains the previous tier"; has "gateway policy sets a starting model" "says a policy starting model outranks the setting"
+json_is "$(MF)" 'd["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"]' "$SONNET" "choosing 4.6 does not touch the policy pin"
+run model OPUS-4-6; rc_is 0 "model <alias> is case-insensitive"; json_is "$(UF)" 'd["model"]' "$OPUS46" "opus 4.6 written as its id"
+run model "$SONNET46"; rc_is 0 "model <4.6 id>"; json_is "$(UF)" 'd["model"]' "$SONNET46" "4.6 id accepted"
+run status; rc_is 0 "status accepts a 4.6 choice"; has "default model setting: Sonnet 4.6 (not the company default, Sonnet 5.5" "status shows a 4.6 setting as not the company default"
+lacks "your choice" "and no longer claims the engineer chose it"
+run downgrade; json_is "$(UF)" 'd["model"]' "$SONNET" "downgrade goes back to the company default"
+run upgrade; json_is "$(UF)" 'd["model"]' "$OPUS" "upgrade still means the upgrade tier (Opus 5.5), not a 4.6 entry"
+fresh; run install --yes --gateway-url https://gw.example.test --model sonnet-4-6; rc_is 0 "install --model sonnet-4-6"
+json_is "$(UF)" 'd["model"]' "$SONNET46" "install --model sets the user's model"; has "from --model" "and says so"
+json_is "$(MF)" 'd["availableModels"][0]' "$SONNET" "policy default unchanged by --model"
+run install --yes --gateway-url https://gw.example.test; json_is "$(UF)" 'd["model"]' "$SONNET46" "a later plain install keeps that choice"
+run install --yes --gateway-url https://gw.example.test --model=claude-opus-4-6; rc_is 0 "install --model=<id> replaces an existing choice"; json_is "$(UF)" 'd["model"]' "$OPUS46" "and wins over it"
+fresh; run install --yes --gateway-url https://gw.example.test --model gpt-5; rc_fails "install --model with an unknown model fails"; has "unknown model"; absent "$M" "and writes nothing"; absent "$U" "not even user settings"
+run install --yes --gateway-url https://gw.example.test --model; rc_fails "--model needs a value"
+run install --yes --gateway-url https://gw.example.test --model sonnet-4-6 --no-user-settings; rc_fails "--model with --no-user-settings is refused"; absent "$M" "and nothing is written"
+run status --model sonnet-4-6; rc_fails "--model on a command other than install is refused"
+run install --dry-run --yes --gateway-url https://gw.example.test --model opus-4-6; rc_is 0 "dry run with --model"; has "$OPUS46" "shows the model it would write"; absent "$U" "writes nothing"
+# the built-in fallback table (no models.json next to the script) matches the shipped catalog
+fresh; run_out print-managed --gateway-url https://gw.example.test; printf '%s' "$OUT" > "$T/builtin.json"
+fresh; run_out print-managed --gateway-url https://gw.example.test --models "$ROOT/config/models.json"; printf '%s' "$OUT" > "$T/shipped.json"
+equal "$(cat "$T/builtin.json")" "$(cat "$T/shipped.json")" "the built-in fallback catalog produces the same policy as config/models.json"
+json_is "$T/builtin.json" '"claude-opus-4-6" in d["availableModels"] and "claude-sonnet-4-6" in d["availableModels"]' true "fallback allows both 4.6 ids"
+# recipe: run 4.6 as the default for everyone
+fresh; catmod "$RECIPE" "$S/models.json"; printf '{"gatewayUrl":"https://gw.example.test"}' > "$S/defaults.json"; run install --yes; rc_is 0 "install with the 4.6-default recipe"
+json_is "$(MF)" 'd["availableModels"]' "[\"$SONNET46\", \"$SONNET\", \"$OPUS\", \"$HAIKU\", \"$OPUS46\"]" "recipe: 4.6 default is first, every enabled model is still allowed"
+json_is "$(MF)" 'sorted(d["env"].items())' "[[\"ANTHROPIC_DEFAULT_HAIKU_MODEL\", \"$HAIKU\"], [\"ANTHROPIC_DEFAULT_OPUS_MODEL\", \"$OPUS46\"], [\"ANTHROPIC_DEFAULT_SONNET_MODEL\", \"$SONNET46\"]]" "recipe: the sonnet and opus pins are the 4.6 ids"
+json_is "$(UF)" 'd["model"]' "$SONNET46" "recipe: a new engineer starts on Sonnet 4.6 (the catalog default, no defaults.json model needed)"
+run model sonnet; rc_is 0 "recipe: the 5.5 entries can still be chosen"; json_is "$(UF)" 'd["model"]' "$SONNET" "recipe: sonnet means the 5.5 entry by alias, 4.6 by pin"
+run reset; json_is "$(UF)" 'd["model"]' "$SONNET46" "recipe: reset goes to 4.6"
+# a machine installed before the recipe sees drift and update repairs it
+fresh; printf '{"gatewayUrl":"https://gw.example.test"}' > "$S/defaults.json"; run install --yes; catmod "$RECIPE" "$S/models.json"
+run status; rc_fails "switching the catalog to the recipe shows up as drift"; has "ANTHROPIC_DEFAULT_SONNET_MODEL" "names the pin that moved"
+run update --yes; rc_is 0 "update applies the recipe"; json_is "$(MF)" 'd["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"]' "$OPUS46" "opus pin moved to 4.6"
+json_is "$(MF)" 'd["availableModels"][0]' "$SONNET46" "default moved to 4.6"
+# a disabled implicit pin does not collide with an explicit one
+fresh; catmod 'c["default"]="sonnet-4-6"
+for m in c["models"]:
+    if m["alias"]=="sonnet": m["enabled"]=False
+    if m["alias"]=="sonnet-4-6": m["pin"]=True' "$S/models.json"
+run_out print-managed --gateway-url https://gw.example.test; rc_is 0 "disabling the old entry is an alternative to pin:false"
+printf '%s' "$OUT" > "$D/pm.json"; json_is "$D/pm.json" 'd["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"]' "$SONNET46" "and the pin follows the enabled entry"
+# a family and a pin on an entry that is not named like its family
+fresh; catmod 'c["models"].append({"alias":"fast-sonnet","id":"claude-sonnet-x","family":"sonnet","tier":"x"})
+c["default"]="fast-sonnet"
+for m in c["models"]:
+    if m["alias"]=="sonnet": m["pin"]=False
+c["models"][-1]["pin"]=True' "$S/models.json"
+run_out print-managed --gateway-url https://gw.example.test; printf '%s' "$OUT" > "$D/pm.json"; json_is "$D/pm.json" 'd["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"]' claude-sonnet-x "a custom alias can pin a family when given family and pin"
+# invalid catalogs are refused, loudly, and never leave the machine half-configured or unlocked
+bad_cat() {   # bad_cat <python edit> <expected words>
+  fresh; catmod "$1" "$S/models.json"
+  run install --yes --gateway-url https://gw.example.test; rc_fails "install refuses: $1"; has "$2" "says why: $2"; lacks "Traceback" "no traceback: $1"; absent "$M" "nothing written: $1"; absent "$U" "no user settings either: $1"
+  run_out print-managed --gateway-url https://gw.example.test; rc_fails "print-managed refuses: $1"
+  OUT="$("$PKG" --gateway-url https://gw.example.test --models "$S/models.json" --out "$D/pk" 2>&1)"; RC=$?; rc_fails "package-client.sh refuses: $1"; absent "$D/pk" "builds nothing: $1"
+}
+bad_cat 'c["models"][3]["alias"]="sonnet"' "aliases must be unique"
+bad_cat 'c["models"][3]["alias"]="SONNET"' "aliases must be unique"
+bad_cat 'c["models"][3]["id"]=c["models"][0]["id"]' "ids must be unique"
+bad_cat 'c["models"][3]["pin"]=True' "more than one model pins the sonnet family"
+bad_cat 'c["models"][3]["family"]="sonnet"; c["models"][4]["family"]="sonnet"; c["models"][4]["pin"]=True; c["models"][3]["pin"]=True; c["models"][0]["pin"]=False' "more than one model pins the sonnet family"
+bad_cat 'c["default"]="nope"' "must be the alias or id of a model"
+bad_cat 'c["default"]="opus-4-6"; c["models"][4]["enabled"]=False' "must be enabled"
+bad_cat 'c["models"][3]["enabled"]=False; c["models"][3]["pin"]=True; c["models"][0]["pin"]=False' "pinned but disabled"
+bad_cat 'c["models"][3].pop("family"); c["models"][3]["pin"]=True' "has no family"
+bad_cat 'c["models"][3]["family"]="gpt"' "family"
+bad_cat 'c["models"][3]["pin"]="yes"' "pin"
+bad_cat 'c["models"][3]["family"]=5' "family"
+# fail closed on a machine that already has a policy: a bad catalog must not rewrite or remove it
+fresh; printf '{"gatewayUrl":"https://gw.example.test"}' > "$S/defaults.json"; run install --yes; cp "$(MF)" "$D/before.json"; cp "$(UF)" "$D/ubefore.json"
+catmod 'c["models"][3]["pin"]=True' "$S/models.json"
+run update --yes; rc_fails "update with an invalid catalog fails"; equal "$(cat "$(MF)")" "$(cat "$D/before.json")" "the installed policy is untouched (still locked down)"
+run model sonnet-4-6; rc_fails "model with an invalid catalog fails"; equal "$(cat "$(UF)")" "$(cat "$D/ubefore.json")" "user settings untouched"
+run status; rc_fails "status with an invalid catalog fails"
+run uninstall --yes; rc_fails "uninstall refuses to run on an invalid catalog rather than guess"; exists "$(MF)" "the policy is still there"
+
+section "round 4: address classification (what Claude Code's /login accepts)"
+fresh
+for u in https://10.1.2.3 https://172.16.0.9 https://172.31.255.1 https://192.168.1.1 https://169.254.1.1 https://100.64.1.5 https://100.127.255.254 'https://[fd00::1]' 'https://[fe80::1]' http://127.0.0.1:19350; do
+  run install --dry-run --yes --gateway-url "$u"; has "loopback/private" "accepted as private: $u"; lacks "public address" "no public warning: $u"
+done
+for u in https://203.0.113.9 https://198.51.100.7 https://192.0.2.1 https://198.18.0.5 https://8.8.8.8 https://172.32.0.1 https://100.128.0.1 https://100.63.255.255 https://240.0.0.1 https://0.1.2.3 'https://[2001:db8::1]'; do
+  run install --dry-run --yes --gateway-url "$u"; has "resolves to a public address" "treated as public: $u"; lacks "loopback/private, which" "not called private: $u"
+done
+has "gatewayInternalNetworks" "the public-address warning names the managed setting that fixes it"
+
+section "round 4: gatewayInternalNetworks (managed setting; declared in defaults.json, validated like Claude Code does)"
+fresh; printf '{"gatewayUrl":"https://198.51.101.7","gatewayInternalNetworks":["198.51.101.0/24","192.0.9.0/24"]}' > "$S/defaults.json"
+run install --yes; rc_is 0 "a declared block is accepted"; has "inside a gatewayInternalNetworks block" "a gateway inside the block is reported as declared, not public"; lacks "resolves to a public address" "no public warning"
+json_is "$(MF)" 'd["gatewayInternalNetworks"]' '["198.51.101.0/24", "192.0.9.0/24"]' "the blocks are written into the managed policy"
+run status; has "policy matches the model catalog" "status is happy with the policy"
+printf '{"gatewayUrl":"https://198.51.101.7","gatewayInternalNetworks":["198.51.101.0/24"]}' > "$S/defaults.json"; run status; rc_fails "status sees drift when the declared blocks changed"; has "gatewayInternalNetworks" "and names the key"
+run update --yes; rc_is 0 "update rewrites the blocks"; json_is "$(MF)" 'd["gatewayInternalNetworks"]' '["198.51.101.0/24"]' "the new block list is installed"
+run uninstall --yes; rc_is 0 "uninstall"; absent "$(MF)" "uninstall removes the blocks it wrote (and with them the whole file: nothing else was in it)"
+run_out print-managed; printf '%s' "$OUT" > "$D/pm.json"; json_is "$D/pm.json" 'd["gatewayInternalNetworks"]' '["198.51.101.0/24"]' "print-managed (for MDM) carries the blocks"
+# no declaration in defaults: an MDM-delivered key is neither added, nor removed, nor overwritten, and still silences the public warning
+fresh; mkdir -p "$M"; printf '{"gatewayInternalNetworks":["198.51.101.0/24"]}' > "$(MF)"
+run install --yes --gateway-url https://198.51.101.7; rc_is 0 "install next to an MDM-delivered key"; has "inside a gatewayInternalNetworks block" "the MDM key counts"
+json_is "$(MF)" 'd["gatewayInternalNetworks"]' '["198.51.101.0/24"]' "and survives install"
+run uninstall --yes; json_is "$(MF)" 'd["gatewayInternalNetworks"]' '["198.51.101.0/24"]' "and survives uninstall (not ours)"
+run uninstall --yes --force; json_is "$(MF)" 'd["gatewayInternalNetworks"]' '["198.51.101.0/24"]' "even with --force (only keys our defaults declare are owned)"
+fresh; run install --dry-run --yes --gateway-url https://198.51.101.7; has "resolves to a public address" "without any declaration the same address is public"
+bad_gin() {   # bad_gin <json list> <words>
+  fresh; printf '{"gatewayUrl":"https://gw.example.test","gatewayInternalNetworks":%s}' "$1" > "$S/defaults.json"
+  run install --yes; rc_fails "refused: gatewayInternalNetworks $1"; has "$2" "says why: $2"; lacks Traceback "no traceback"; absent "$M" "nothing written"
+  OUT="$("$PKG" --gateway-url https://gw.example.test --defaults "$S/defaults.json" --out "$D/pk" 2>&1)"; RC=$?; rc_fails "package-client.sh refuses it too"; absent "$D/pk" "and builds nothing"
+}
+bad_gin '["10.1.0.0/16"]' "overlaps 10.0.0.0/8"; bad_gin '["203.0.113.0/24"]' "overlaps 203.0.113.0/24"; bad_gin '["198.51.101.1/24"]' "not a block"
+bad_gin '["198.51.101.0/7"]' "/8 to /32"; bad_gin '["198.51.101.0"]' "first address and a prefix"; bad_gin '["2001:db8::/32"]' "first address and a prefix"
+bad_gin '["198.51.101.0/24","198.51.101.0/25"]' "overlap"; bad_gin '["192.0.9.0/24","192.0.10.0/24","192.0.11.0/24","192.0.12.0/24","192.0.13.0/24"]' "at most four"
+bad_gin '"198.51.101.0/24"' "must be a list"; bad_gin '[5]' "must be a list"; bad_gin '["224.0.0.0/8"]' "overlaps 224.0.0.0/4"; bad_gin '["100.64.0.0/10"]' "overlaps 100.64.0.0/10"
+
+section "round 4: model ids with Vertex forms, empty values"
+fresh; catmod 'c["models"][3]["id"]="claude-sonnet-4-5@20250929"' "$S/models.json"; printf '{"gatewayUrl":"https://gw.example.test"}' > "$S/defaults.json"
+run install --yes --model sonnet-4-6; rc_is 0 "an id with @date (the Vertex form of older Claude ids) is accepted"
+json_is "$(MF)" '"claude-sonnet-4-5@20250929" in d["availableModels"]' true "and allowed in the policy"; json_is "$(UF)" 'd["model"]' "claude-sonnet-4-5@20250929" "and usable as a personal model"
+OUT="$("$PKG" --gateway-url https://gw.example.test --models "$S/models.json" --out "$D/pk" 2>&1)"; RC=$?; rc_is 0 "package-client.sh builds it"
+run model "claude-sonnet-4-5@20250929"; rc_is 0 "model <id with @>"
+for badid in 'a$b' 'a;b' 'a b' 'a`b' 'a"b' "a'b" 'a\\b' 'a|b' 'a&b' 'a<b' 'a(b' 'a*b'; do
+  fresh; catmod "c['models'][3]['id']=$(python3 -I -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$badid")" "$S/models.json"
+  run_out print-managed --gateway-url https://gw.example.test; rc_fails "an id with a shell/JSON-special character is still refused: $badid"
+done
+fresh; run install --yes --gateway-url https://gw.example.test --model ""; rc_fails "--model with an empty value is an error, not 'unset'"; has "--model needs"; absent "$M" "nothing written"
+for dv in null '""'; do
+  fresh; catmod "c['default']=$( [ "$dv" = null ] && echo None || echo '""' )" "$S/models.json"
+  run install --yes --gateway-url https://gw.example.test; rc_fails "a catalog with default $dv is refused (API and Terraform refuse it too)"; has "\"default\" is empty"; absent "$M" "nothing written for default $dv"
+done
+
+section "round 4: an unpinned family is called out"
+fresh; catmod 'for m in c["models"]:
+    if m["alias"]=="sonnet": m["pin"]=False' "$S/models.json"
+run install --yes --gateway-url https://gw.example.test; rc_is 0 "a legal catalog that leaves sonnet unpinned installs"; has "no model pins the sonnet family (sonnet, sonnet-4-6)" "with a warning naming the family and its entries"
+run update --yes; has "no model pins the sonnet family" "update warns too"
+run status; has "no model pins the sonnet family" "status warns too"
+run print-managed --gateway-url https://gw.example.test; has "no model pins the sonnet family" "print-managed warns on stderr"
+fresh; run install --yes --gateway-url https://gw.example.test; lacks "no model pins" "the shipped catalog has no warning"
+fresh; catmod "$RECIPE" "$S/models.json"; run install --yes --gateway-url https://gw.example.test; lacks "no model pins" "the recipe moves the pin, so there is no warning"
+
+section "round 4: uninstall after the catalog changed blames the catalog, not an admin"
+fresh; run install --yes --gateway-url https://gw.example.test; catmod "$RECIPE" "$D/recipe.json"
+run uninstall --yes --models "$D/recipe.json"; rc_is 0 "uninstall with a different catalog than the one installed"
+lacks "an admin changed them." "no longer blames 'an admin' alone"; has "another version or model catalog wrote them" "names the catalog as a cause"; has "sign-in lock itself is gone" "says the lock is already gone"; has "uninstall --force" "and offers --force in the same message"
+json_is "$(MF)" '"forceLoginGatewayUrl" in d' false "the lock keys were removed"; json_is "$(MF)" '"availableModels" in d' true "the model list was left"
+run uninstall --yes --force; absent "$(MF)" "--force finishes it (nothing else was in the file, so it is removed)"
+fresh; run install --yes --gateway-url https://gw.example.test; python3 -I -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d["allowedProviders"]=["gateway","bedrock"]; json.dump(d,open(p,"w"))' "$(MF)"
+run uninstall --yes; has "STILL LOCKED" "if a lock key was left alone, it says the machine is still locked"
 
 section "housekeeping"
 fresh; run --help; rc_is 0 "--help"; has "install"; has "--dry-run"
