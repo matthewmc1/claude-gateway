@@ -166,7 +166,7 @@ locals {
     }
     provider-errors = {
       name      = "Claude gateway: provider error burst"
-      filter    = "metric.type=\"${local.lm.claude_gateway_upstream_errors}\""
+      filter    = "metric.type=\"${local.lm.claude_gateway_upstream_errors}\" AND resource.type=one_of(\"cloud_run_revision\", \"cloud_run_job\")"
       aligner   = "ALIGN_SUM"
       reducer   = "REDUCE_SUM"
       period    = 300
@@ -176,7 +176,7 @@ locals {
     }
     spend-cap-blocks = {
       name      = "Claude gateway: spend-cap blocks surge"
-      filter    = "metric.type=\"${local.lm.claude_gateway_spend_cap_blocks}\""
+      filter    = "metric.type=\"${local.lm.claude_gateway_spend_cap_blocks}\" AND resource.type=one_of(\"cloud_run_revision\", \"cloud_run_job\")"
       aligner   = "ALIGN_SUM"
       reducer   = "REDUCE_SUM"
       period    = 900
@@ -186,7 +186,7 @@ locals {
     }
     security-denials = {
       name      = "Claude gateway: auth and admin denials"
-      filter    = "metric.type=one_of(\"${local.lm.claude_gateway_auth_denied}\", \"${local.lm.claude_gateway_admin_denied}\", \"${local.lm.claude_app_login_failed}\")"
+      filter    = "metric.type=one_of(\"${local.lm.claude_gateway_auth_denied}\", \"${local.lm.claude_gateway_admin_denied}\", \"${local.lm.claude_app_login_failed}\") AND resource.type=one_of(\"cloud_run_revision\", \"cloud_run_job\")"
       aligner   = "ALIGN_SUM"
       reducer   = "REDUCE_SUM"
       period    = 900
@@ -226,7 +226,7 @@ locals {
     }
     scheduler-failures = {
       name      = "Claude budget app: scheduler tick failing"
-      filter    = "metric.type=\"${local.lm.claude_scheduler_failures}\""
+      filter    = "metric.type=\"${local.lm.claude_scheduler_failures}\" AND resource.type=one_of(\"cloud_run_revision\", \"cloud_run_job\")"
       aligner   = "ALIGN_SUM"
       reducer   = "REDUCE_SUM"
       period    = 600
@@ -322,7 +322,7 @@ resource "google_monitoring_alert_policy" "app_events" {
   conditions {
     display_name = each.value.name
     condition_threshold {
-      filter          = length(each.value.metric) == 1 ? "metric.type=\"${local.lm[each.value.metric[0]]}\"" : "metric.type=one_of(${join(", ", [for m in each.value.metric : "\"${local.lm[m]}\""])})"
+      filter          = "${length(each.value.metric) == 1 ? "metric.type=\"${local.lm[each.value.metric[0]]}\"" : "metric.type=one_of(${join(", ", [for m in each.value.metric : "\"${local.lm[m]}\""])})"} AND resource.type=one_of(\"cloud_run_revision\", \"cloud_run_job\")"
       comparison      = "COMPARISON_GT"
       threshold_value = each.value.min_count - 1
       duration        = "0s"
@@ -367,7 +367,7 @@ resource "google_monitoring_alert_policy" "tick_missing" {
   conditions {
     display_name = "No tick event for 5 minutes"
     condition_absent {
-      filter   = "metric.type=\"${local.lm.claude_app_tick}\""
+      filter   = "metric.type=\"${local.lm.claude_app_tick}\" AND resource.type=one_of(\"cloud_run_revision\", \"cloud_run_job\")"
       duration = "${local.th.tick_missing_minutes * 60}s"
 
       aggregations {
