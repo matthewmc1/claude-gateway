@@ -4,7 +4,7 @@
 # deploy/build-push.sh does both. Context is filtered by deploy/Dockerfile.app.dockerignore.
 # Pinned by digest (multi-arch index of node:22-slim, resolved with `docker buildx imagetools inspect node:22-slim`).
 # Dependabot (docker ecosystem, /deploy) proposes updates; to refresh by hand, re-run the inspect command and paste the digest.
-FROM node:22-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392
+FROM node:26-slim@sha256:0d1e33586362bb9e608c4e751e7a9e7edb55c9ac11461ed5666af696cc461dd4
 WORKDIR /srv
 COPY api/server.mjs api/server.mjs
 # The same image runs the tick job (Cloud Run job `claude-budget-tick`, command: node api/tick.mjs) when the app sits behind IAP.
