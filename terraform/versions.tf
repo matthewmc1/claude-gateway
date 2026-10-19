@@ -7,7 +7,7 @@ terraform {
     # `terraform init -upgrade` once and read the plan before applying (docs/DEPLOY.md).
     google = {
       source  = "hashicorp/google"
-      version = "~> 7.30"
+      version = "~> 8.7"
     }
     # Self-signed CA and leaf certificate for the internal load balancer (gateway_tls.mode = "self_signed").
     tls = {
