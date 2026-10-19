@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { E } from './lib/env.mjs';
-import { ROOT, modelPolicy, readCatalog, recipe46 } from './lib/config.mjs';
+import { ROOT, modelPolicy, readCatalog, recipe46, sonnet46Default } from './lib/config.mjs';
 import { messages, mintSession, unique, wget } from './lib/gw.mjs';
 
 const SCRIPT = path.join(ROOT, 'client', 'claude-gateway-setup.sh');
@@ -70,8 +70,11 @@ describe('L4 install against the real gateway', () => {
     // the gateway states the starting model explicitly (Anthropic: availableModels alone leaves the gateway-session default on the Opus alias)
     assert.equal(g.model, cat.model, 'the gateway pushes model = the catalog default (first availableModels entry)');
     assert.equal(g.model, cat.availableModels[0]);
-    // Sonnet 4.6 is the shipped default and Sonnet pin; Opus 4.6 is allowed by name but pins nothing, so the Opus pin stays on 5.5
-    for (const id of ['claude-sonnet-4-6', 'claude-opus-4-6']) assert.ok(p.availableModels.includes(id), id + ' is allowed');
+    // Haiku 5.5 is the shipped default; Sonnet 4.6 is the Sonnet pin; Opus 4.6 is allowed by name but pins nothing, so the Opus pin stays on 5.5
+    assert.equal(g.model, 'claude-haiku-5-5', 'the gateway starts every session on Haiku 5.5');
+    assert.equal(p.availableModels[0], 'claude-haiku-5-5');
+    for (const id of ['claude-sonnet-4-6', 'claude-sonnet-5-5', 'claude-opus-4-6']) assert.ok(p.availableModels.includes(id), id + ' is allowed');
+    assert.equal(p.env.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'claude-haiku-5-5');
     assert.equal(p.env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-4-6');
     assert.equal(p.env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-5-5', 'no Opus 4.6 pin unless an admin runs the Opus half of the recipe');
     // anything the gateway pushes that the installer also writes must be identical; the rest must not collide
@@ -104,6 +107,19 @@ describe('L4 install against the real gateway', () => {
     assert.equal(two.userSettings().model, 'claude-opus-4-6');
     assert.ok(two.policy().availableModels.includes(two.userSettings().model), 'what they chose is allowed by the policy');
     assert.notEqual(two.run(['install', '--yes', '--gateway-url', E.gwUrl, '--model', 'gpt-4']).rc, 0, 'an unknown --model is refused');
+  });
+
+  test('the "make Sonnet 4.6 the default" recipe: default and tiers move, the pins do not, and a new engineer starts on Sonnet 4.6', () => {
+    const sb2 = sandbox('s46default'), cat = sonnet46Default(), file = path.join(sb2.root, 'models.json');
+    fs.writeFileSync(file, JSON.stringify(cat));
+    const want = modelPolicy(cat);
+    assert.equal(want.availableModels[0], 'claude-sonnet-4-6');
+    assert.deepEqual(want.env, modelPolicy().env, 'same pins as the shipped catalog');
+    assert.equal(sb2.run(['install', '--yes', '--gateway-url', E.gwUrl, '--models', file]).rc, 0);
+    const p = sb2.policy();
+    assert.deepEqual(p.availableModels, want.availableModels); assert.deepEqual(p.env, want.env);
+    assert.equal(sb2.userSettings().model, 'claude-sonnet-4-6');
+    assert.ok(p.availableModels.includes('claude-haiku-5-5'), 'Haiku stays allowed by name');
   });
 
   test('the 4.6-default recipe: the installer renders exactly the policy the gateway config would carry for that catalog', () => {

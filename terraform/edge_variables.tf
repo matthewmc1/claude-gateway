@@ -97,9 +97,9 @@ variable "iap_oauth_client_secret" {
 }
 
 variable "iap_launch_stage" {
-  description = "Cloud Run launch stage requested for the app when IAP is enabled directly on it. \"BETA\" (default) is what direct IAP needed when this was written; use \"GA\" once Google lists it as generally available (the field is then left unset)."
+  description = "Cloud Run launch stage requested for the app when IAP is enabled directly on it. \"GA\" (default; the field is left unset) because Google's Cloud Run release notes list direct IAP as generally available since 2026-03-13. Asking for \"BETA\" on a feature that is now GA makes Cloud Run report GA back, so every plan would show a launch_stage change: use \"BETA\" only if your project/provider still needs the preview flag."
   type        = string
-  default     = "BETA"
+  default     = "GA"
 
   validation {
     condition     = contains(["BETA", "GA"], var.iap_launch_stage)
@@ -369,7 +369,7 @@ variable "app_security_policy" {
 }
 
 variable "iap_create_agent_with_gcloud" {
-  description = "app_access = \"iap\": the GA Google provider cannot create IAP's service agent, so Terraform runs `gcloud beta services identity create --service=iap.googleapis.com` (local-exec, on the machine that applies; a failure is ignored and the later grant tells you what to do) before it grants the agent run.invoker on the app. false: skip that and create the agent yourself (edge_next_steps)."
+  description = "app_access = \"iap\": the GA Google provider cannot create IAP's service agent, so Terraform runs `gcloud services identity create --service=iap.googleapis.com` (falling back to `gcloud beta ...`; local-exec, on the machine that applies; a failure is ignored and the later grant tells you what to do) before it grants the agent run.invoker on the app. false: skip that and create the agent yourself (edge_next_steps)."
   type        = bool
   default     = true
 }

@@ -44,9 +44,9 @@ rule in front of the app.
 * A Google Cloud project with billing enabled (Owner is simplest for the first run; see the IAP note below if users are outside your
   organisation) and these tools: `terraform` 1.5+, `gcloud`, `docker` (buildx), `node` 20+, `curl`, `gpg`, `jq`.
 * `gcloud auth login` and `gcloud auth application-default login`. With `app_access = "iap"` the machine that runs `terraform apply` should also
-  have `gcloud` with the beta component: Terraform runs `gcloud beta services identity create --service=iap.googleapis.com` once to create IAP's
+  have a recent `gcloud`: Terraform runs `gcloud services identity create --service=iap.googleapis.com` (falling back to `gcloud beta ...`) once to create IAP's
   service agent (best effort; `iap_create_agent_with_gcloud = false` turns it off, see [step 4.6](#4-console-only-steps-terraform-cannot-do-these)).
-* **Claude models enabled for the project** in Vertex AI Model Garden, with quota (see [section 7](#7-models-enable-sonnet-46-and-opus-46)).
+* **Claude models enabled for the project** in Vertex AI Model Garden, with quota, **including the default model (Haiku 5.5 as shipped), or every session fails** (see [section 7](#7-models-the-default-sonnet-46-and-opus-46)).
 * An identity provider for engineer sign-in (Google Workspace by default; Okta/Entra work). You create its OAuth client by hand
   (Terraform cannot): see [step 4](#4-console-only-steps-terraform-cannot-do-these).
 * Enterprise only: a **private DNS name** you control (for example `claude-gateway.corp.example.com`) and a network path
@@ -101,7 +101,7 @@ Or copy a ready-made example and edit it:
 
 Without `--create-state-bucket` (or an existing `--state-bucket`) the wizard falls back to a **local** Terraform state file and says so:
 that file then holds the generated passwords and keys, so do not do that for a real deployment. The region defaults to `europe-west2`
-(`--region` changes it; see [section 7](#7-models-enable-sonnet-46-and-opus-46) for which regions serve Claude 4.6 upstream).
+(`--region` changes it; see [section 7](#7-models-the-default-sonnet-46-and-opus-46) for which regions serve Claude 4.6 upstream).
 
 Then apply in the usual two phases (the images must exist before Cloud Run can start):
 
@@ -128,7 +128,7 @@ Key variables (full list in `terraform/variables.tf` and `edge_variables.tf`):
 | `lb_subnet_cidr`, `proxy_only_subnet_cidr`, `lb_ip` | the load balancer's network; defaults (`10.0.1.0/24`, `10.0.2.0/23`) are fine unless they overlap yours. Rules below the table |
 | `gateway_allow_cidrs`, `gateway_internal_networks` | optional client-address allow-list for the gateway (section 5 step 3) and the ranges for Claude Code's `gatewayInternalNetworks` MDM text |
 | `app_security_policy` | optional, only with `app_domain`: name of an existing Cloud Armor policy (for example your office/VPN ranges) to attach to the custom-domain load balancer; without it IAP alone protects that public address |
-| `iap_create_agent_with_gcloud` | default `true`: Terraform runs `gcloud beta services identity create --service=iap.googleapis.com` before granting IAP's service agent `run.invoker` (failure is ignored). `false` skips it |
+| `iap_create_agent_with_gcloud` | default `true`: Terraform runs `gcloud services identity create --service=iap.googleapis.com` (falling back to `gcloud beta ...`) before granting IAP's service agent `run.invoker` (failure is ignored). `false` skips it |
 | `analytics` | `"logging"` (default) or `"bigquery"`: two datasets, a log sink and an analyst view; see [BigQuery analytics](#bigquery-analytics-optional) |
 
 Address rules (all checked at plan time): `lb_subnet_cidr` and `proxy_only_subnet_cidr` must lie in private space (`10/8`, `172.16/12`,
@@ -172,19 +172,22 @@ The view excludes `spend.blocked` events, so it undercounts requests refused for
    Put the client id in `oidc.client_id` and the secret in `TF_VAR_oidc_client_secret`, then apply. The host of this redirect URI must
    be exactly the gateway's `public_url` host.
    The redirect host must be on a **public top-level domain** (Google refuses `.internal`, `.local`, `.lan`), see [Prerequisites](#2-prerequisites).
+   Consent-screen choices, rotation and troubleshooting: [OAUTH.md](OAUTH.md).
 2. **IAP consent screen (enterprise).** Google Auth Platform, Branding: *Internal* if everyone is in your Google Workspace /
    Cloud Identity organisation; otherwise *External* and add every admin and viewer as a **test user** (individual accounts only: a
    `group:` or `domain:` member in `app_viewers` cannot be a test user). Skipping this shows a Google
    sign-in error instead of the app. A project with no organisation (such as a personal trial project) needs the External option.
+   For **direct IAP on Cloud Run** the same people also need a custom OAuth client bound to the service (Google's managed client is for internal users only):
+   create a Web client with redirect URI `https://iap.googleapis.com/v1/oauth/clientIds/<CLIENT_ID>:handleRedirect`, then run the `gcloud iap settings set ... --resource-type=cloud-run`
+   command that `terraform output edge_next_steps` prints (step A2). Unverified until applied.
 3. **OAuth client for IAP (enterprise-domain only).** Create a *Web application* client with the redirect URI printed in
    `edge_next_steps` (step A3), then set `iap_oauth_client_id` and `TF_VAR_iap_oauth_client_secret` and apply again.
 4. **DNS and certificate (enterprise-domain).** Create the A record `app_domain` -> `terraform output app_lb_ip`; the managed
    certificate becomes ACTIVE within about an hour.
 5. **Network path (enterprise).** Make `gateway_hostname` resolve from laptops to the load balancer IP (`terraform output gateway_lb_ip`):
    forward the private zone through your resolvers, over VPN or Interconnect. Terraform cannot do this.
-6. **IAP service agent (first IAP apply only).** Terraform first tries that itself (`iap_create_agent_with_gcloud`, local `gcloud` with the beta
-   component, failure ignored). If the apply still stops with "service account ... does not exist", run
-   `gcloud beta services identity create --service=iap.googleapis.com --project=<project>` by hand and apply again.
+6. **IAP service agent (first IAP apply only).** Terraform first tries that itself (`iap_create_agent_with_gcloud`, local `gcloud`, failure ignored). If the apply still stops with "service account ... does not exist", run
+   `gcloud services identity create --service=iap.googleapis.com --project=<project>` by hand and apply again.
 
 ## 5. Roll out to engineers
 
@@ -195,7 +198,7 @@ queries for the name to Cloud DNS (inbound server policy), over your VPN or Inte
 of the VPC need `lb_allow_global_access = true`. Check from a laptop on the VPN: `dig +short <gateway_hostname>` returns the private address.
 
 1. Package the installer with your gateway address baked in (it also bakes in the model catalog, so **rebuild and redistribute it every time
-   `config/models.json` changes**, [section 7](#7-models-enable-sonnet-46-and-opus-46)):
+   `config/models.json` changes**, [section 7](#7-models-the-default-sonnet-46-and-opus-46)):
    ```bash
    cp config/models.json client/models.json                                              # keep the two copies identical (the client tests check it)
    scripts/package-client.sh --gateway-url https://claude-gateway.corp.example.com      # trial: http://localhost:8891
@@ -267,10 +270,11 @@ of the VPC need `lb_allow_global_access = true`. Check from a laptop on the VPN:
 
 If something fails, see [Troubleshooting](#9-troubleshooting).
 
-## 7. Models: enable Sonnet 4.6 and Opus 4.6
+## 7. Models: the default, Sonnet 4.6 and Opus 4.6
 
-The catalog (`config/models.json`) contains Sonnet 4.6 (`claude-sonnet-4-6`), Opus 4.6 (`claude-opus-4-6`), Sonnet 5.5, Opus 5.5 and Haiku 5.5.
-**Sonnet 4.6 is the default** and the Sonnet pin; Opus stays on 5.5 unless you apply the recipe below; everything else is allowed by name. Changing the catalog needs a `terraform apply` (the gateway
+The catalog (`config/models.json`) ships five models. **Haiku 5.5 is the default** (every session starts on it); **Sonnet 4.6**
+(`claude-sonnet-4-6`) is the Sonnet pin, so `/model sonnet` means Sonnet 4.6; **Opus 5.5** is the Opus pin and the `upgrade` step. Sonnet 5.5 and
+Opus 4.6 (`claude-opus-4-6`) are allowed by name and pin nothing. Every enabled model is allowed. Changing the catalog needs a `terraform apply` (the gateway
 policy, engineer aliases and the app all follow) **and** a rebuilt installer (below).
 
 **How the default model is decided.** The gateway policy (`gateway.yaml`, delivered when Claude Code signs in) lists every enabled model in
@@ -283,33 +287,50 @@ a session with `/model`, or start one with `claude --model <id>`. **(precedence 
 
 ### Step 1: make the models available in Google Cloud
 
-1. In the Cloud Console open Vertex AI, Model Garden, find *Claude Sonnet 4.6* and **Enable** it for the project. This is **required**: it is the company default, so every session fails until it is enabled. Do the same for *Opus 4.6* if you keep it in the catalog, and for the 5.5 models you allow.
+1. In the Cloud Console open Vertex AI, Model Garden, find *Claude Haiku 5.5* and **Enable** it for the project. This is **required**: Haiku 5.5 is the
+   company default, so **every session fails until the default model is enabled** (and again if you later move the default to another model: enable the new
+   default first). Do the same for *Claude Sonnet 4.6* (the `sonnet` pin: `/model sonnet` fails without it), *Claude Opus 5.5* (the `opus` pin and the upgrade step),
+   and for *Sonnet 5.5* and *Opus 4.6* if you keep them in the catalog (otherwise set `"enabled": false` on them).
 2. Check quota for the region you use (quota names look like `global_online_prediction_requests_per_base_model`; Google's
    published defaults for 4.6 are 1,500 requests/min for Sonnet (1,800 in `europe-west1`) and 200 for Opus, 400 for Opus on the global endpoint).
-3. Pick the region carefully. Claude 4.6 is served from **`global`**, `us-east5`, `europe-west1` and `asia-southeast1`. It is **not**
+   Quota for Haiku 5.5: check the Quotas page.
+3. Pick the region carefully. **Haiku 5.5 region availability is not documented in this repository: check Model Garden** for where it is served before
+   you choose `vertex_region`. Claude 4.6 (Sonnet 4.6 and Opus 4.6) is served from **`global`**, `us-east5`, `europe-west1` and `asia-southeast1`. It is **not**
    served from `europe-west2`. Cloud Run and Cloud SQL may live anywhere; the Vertex *upstream* region is `vertex_region`
-   (default `global`, which is right). Terraform warns (`check`) if an upstream region is not in that list while 4.6 is enabled; set
-   `"enabled": false` on `opus-4-6` if you never use it and want the warning gone (Sonnet 4.6 is the default, so use `vertex_region = "global"`).
+   (default `global`). Terraform warns (`check`) if an upstream region is not in the 4.6 list while a 4.6 entry is enabled (the Sonnet 4.6 pin is one,
+   so as shipped any region outside that list warns; the check does not know where Haiku 5.5 is served); set `"enabled": false` on both 4.6 entries only if you
+   really never want them, and then also give `sonnet` (5.5) `"pin": true`.
 
 ### Step 2: choose who gets which model
 
 | Goal | What to do |
 |---|---|
-| **Sonnet 4.6 as the default, everything else allowed by name (the shipped state)** | enable Sonnet 4.6 in Model Garden (step 1); run `terraform apply` after pulling this version |
-| Also run Opus 4.6 as the Opus pin | the recipe below |
-| Go back to Sonnet 5.5 as the default | `"default": "sonnet"`, `"pin": true` on `sonnet` and `"pin": false` on `sonnet-4-6`, swap their tiers; `terraform apply`; rebuild the installer |
+| **Haiku 5.5 as the default, Sonnet 4.6 as the Sonnet pin, everything else allowed by name (the shipped state)** | enable Haiku 5.5, Sonnet 4.6 and Opus 5.5 in Model Garden (step 1); run `terraform apply` |
+| Make Sonnet 4.6 the default | the first recipe below: `"default": "sonnet-4-6"`, tiers swapped with `haiku` |
+| Also run Opus 4.6 as the Opus pin | the second recipe below |
+| Go back to Sonnet as the default | `"default": "sonnet"`, `"pin": true` on `sonnet` and `"pin": false` on `sonnet-4-6`; tiers: `sonnet` gets `"default"`, `sonnet-4-6` `"previous"`, `haiku` `"fast"`; `terraform apply`; rebuild the installer |
 | Remove a model | set `"enabled": false` on its entry (not on the default); `terraform apply`; rebuild the installer |
 
-`pin: true` means the `sonnet`/`opus` aliases that Claude Code uses resolve to that model for every engineer; at most one entry per family
+`pin: true` means the `sonnet`/`opus`/`haiku` aliases that Claude Code uses resolve to that model for every engineer; at most one entry per family
 may be pinned, an invalid catalog stops both Terraform and the installer before anything is written, and a family that has entries but no
 pin is flagged (the Models page, the installer and the API all warn: `/model sonnet` would use Claude Code's own version, which may not be allowed).
 
-**Recipe: also run Opus 4.6 as the Opus pin** (Sonnet 4.6 is already the default as shipped; to go back to Sonnet 5.5 apply the same steps the other way round: `"default": "sonnet"`, pin and tiers swapped). In `config/models.json`:
+**Recipe: make Sonnet 4.6 the default** (a mid-size model for everyone, Haiku 5.5 stays allowed and is still what `/model haiku` means). In `config/models.json`:
 
-1. `"default"` stays `"sonnet-4-6"`.
+1. `"default": "sonnet-4-6"`.
+2. Swap the `tier` values so the cards, descriptions and coaching follow: `sonnet-4-6` gets `"default"` and `haiku` gets `"fast"` (the coach then also nudges people to try it for simple tasks). Reword the `description` strings to match (they are shown to every engineer).
+3. The pins do not change (Sonnet 4.6 is already the Sonnet pin).
+4. `cp config/models.json client/models.json`, then `terraform apply` (the gateway policy now starts everyone on Sonnet 4.6).
+5. Rebuild the installer and have people run `update` (steps 5 and 6 of the next recipe). Sonnet 4.6 must be enabled in Model Garden (it already is if you followed step 1).
+
+To go back to Haiku 5.5, apply the same edits the other way round (`"default": "haiku"`, `haiku` gets `"default"`, `sonnet-4-6` gets `"previous"`).
+
+**Recipe: also run Opus 4.6 as the Opus pin** (the default is whatever you set; this does not change it). In `config/models.json`:
+
+1. `"default"` stays as it is.
 2. `"pin": true` on `opus-4-6`; `"pin": false` on `opus`.
-3. Swap the `tier` values so the cards, descriptions and the `upgrade` step follow: `opus-4-6` gets `"upgrade"` and `opus` gets `"previous"`. Reword the `description` strings to match (they are shown to every engineer).
-4. `cp config/models.json client/models.json`, then `terraform apply` (the gateway policy now starts everyone on Sonnet 4.6 and the aliases follow the pins).
+3. Swap the `tier` values so the cards, descriptions and the `upgrade` step follow: `opus-4-6` gets `"upgrade"` and `opus` gets `"previous"`. Reword the `description` strings to match.
+4. `cp config/models.json client/models.json`, then `terraform apply` (the aliases follow the pins).
 5. **Rebuild and redistribute the installer:** `scripts/package-client.sh --gateway-url https://<gateway>`. A stamped installer carries its own copy of the
    catalog and ignores everything else, so an installer built before this change still has the old catalog: it does not know the 4.6 names for `model sonnet-4-6`
    and `update` with it is a no-op.
@@ -317,19 +338,33 @@ pin is flagged (the Models page, the installer and the API all warn: `/model son
    you just applied, so nothing else is needed; if someone set a personal model earlier, `downgrade` (or `reset`, which also resets effort) tidies their own file but
    does not change what a session starts on. Leave `model` out of `client/defaults.json`: a `model` there overrides the catalog default in the personal file.
 
-### Step 3: what engineers do for Sonnet 4.6
+### Step 3: thinking effort (one setting for every model)
 
-Sonnet 4.6 is the company default, so a session starts on it with no action. To use another model (for example Sonnet 5.5 or Opus 4.6), switch on purpose:
+Thinking effort is **not per model**. It is one Claude Code setting, `effortLevel` in each engineer's `~/.claude/settings.json`, and it applies to whichever
+model they are using (Haiku, Sonnet or Opus alike). The admin default comes from one Terraform variable, shipped as `medium`:
+
+```hcl
+client_default_effort = "high"      # low | medium | high | xhigh; goes into the client_defaults output (and client/defaults.json)
+```
+
+Run `terraform apply`, then get the new value to the installer: `terraform output -raw client_defaults > client/defaults.json` (or `write_client_defaults = true`),
+rebuild with `scripts/package-client.sh`, and distribute it. A new install writes it only where the engineer has no valid `effortLevel` yet; people who already have one keep it
+until they run `reset` (back to the admin default) or `effort <level>` (their own choice). Higher effort uses more budget on every model, so raise it deliberately;
+inside a session `/effort high` changes it for that session only.
+
+### Step 4: what engineers do
+
+A session starts on Haiku 5.5 with no action. To move up, switch on purpose:
 
 ```bash
-claude --model claude-opus-4-6                   # start a session on another model (any catalog id works)
-/model                                           # inside Claude Code: lists everything the catalog allows
+claude --model claude-opus-5-5                   # start a session on another model (any catalog id works)
+/model sonnet                                    # inside Claude Code: Sonnet 4.6 (the Sonnet pin); /model opus is Opus 5.5; /model lists everything the catalog allows
 ./claude-gateway-setup.sh model sonnet           # also writes it to my personal settings (alias or id; see the precedence note above)
 ```
 
-The installer's `upgrade` means the first catalog entry with tier `upgrade` (Opus 5.5 until the recipe's tier swap, then Opus 4.6); `model opus-4-6` and
+The installer's `upgrade` means the first catalog entry with tier `upgrade` (Opus 5.5 until the Opus 4.6 recipe's tier swap, then Opus 4.6); `model opus-4-6` and
 `model opus` choose a specific entry by name. All of these edit only the personal file. The admin app's **Models** page shows each model, who uses it,
-any unpinned-family warning and the recipe.
+any unpinned-family warning and the recipe for making another model the default.
 
 ## 8. Verify end to end
 
@@ -364,7 +399,7 @@ any unpinned-family warning and the recipe.
 | Google refuses to save the OAuth client / "invalid redirect" for a `.internal`, `.local` or `.lan` host | Google OAuth accepts only redirect hosts on a public top-level domain: rename the gateway to such a name (it can still resolve only privately) |
 | App shows the gateway unreachable | either the app cannot resolve/route to the load balancer (check the VPC egress and the private DNS zone; `GATEWAY_URL` must be the same name as `gateway_hostname`), **or TLS fails**: with `gateway_tls.mode = "provided"` and a private corporate CA the app only trusts what you give in `gateway_tls.ca_pem` (Terraform warns with `gateway_tls_ca_for_app`); add `ca_pem` and apply |
 | Engineers still land on Opus / an old model list after you changed the catalog | the gateway needs `terraform apply`; their machines need the **rebuilt** installer's `update` (a new `package-client.sh` build; the old file keeps the old catalog) |
-| Apply stops: "service account does not exist" (IAP agent) | step 4.6 above (Terraform already tried `gcloud beta services identity create`; it needs `gcloud` with the beta component on the applying machine, or run it by hand) |
+| Apply stops: "service account does not exist" (IAP agent) | step 4.6 above (Terraform already tried `gcloud services identity create`; it needs `gcloud` on the applying machine, or run it by hand) |
 | Apply stops on `invoker_iam_disabled` | your organisation policy forbids disabling the invoker check; an administrator must allow it for this service (Terraform has no public fallback by design) |
 | Model call fails with 404/403 from Vertex | the model is not enabled for the project, or quota is missing in that region (section 7) |
 
@@ -399,3 +434,46 @@ any unpinned-family warning and the recipe.
 | The gateway config parses in the real `claude gateway` binary | Claude Code's private-address check, certificate pinning and CA trust against our certificates |
 | Whole chain locally with emulators and real headless Chrome | a real Claude reply through Vertex (needs Model Garden access and quota) |
 | Installer on macOS/Linux | the PowerShell installer |
+
+### Unverified until applied: Google API rules an offline plan cannot prove
+
+`terraform plan` accepts any string for an alert filter; the first real apply of this repo was refused for three of them. The rules we
+know are now encoded in `terraform/tests/apirules.rb` and run over every planned topology (with a mutation test for each, so a rule that
+stops firing fails the suite). What follows is what that checker cannot know. Sources are the Google reference pages named in
+brackets, fetched while writing this; "unverified" means we found no page that settles it.
+
+| Area | What could go wrong at apply or run time | Expected symptom | Remedy |
+|---|---|---|---|
+| Alert on a logs-based metric | The metric must exist before the policy, the condition names one metric and a `resource.type` that the metric's log filter can produce ([Monitoring API, `MetricThreshold.filter`](https://cloud.google.com/monitoring/api/ref_v3/rest/v3/projects.alertPolicies)). Checked statically. NOT checked: whether Cloud Scheduler failures really arrive as `severity>=ERROR` entries on `resource.type="cloud_scheduler_job"` (unverified) | apply: `400 ... filter` error naming the condition; or the policy exists but never fires (a metric with no data) | Read the metric in Metrics Explorer (`logging.googleapis.com/user/claude_scheduler_failures`), fix the filter in `monitoring.tf` |
+| Tick-missing alert | An absence condition stays silent until the series has existed once ([`MetricAbsence`](https://cloud.google.com/monitoring/api/ref_v3/rest/v3/projects.alertPolicies): `duration` at least 120 s) | No alert if the scheduler never ticked after the deploy | Check the scheduler job ran at least once; see DEPLOY.md |
+| Duplicate condition names | The API reference only says "don't use the same display name for multiple conditions in the same policy"; whether it refuses them is unverified. The checker treats them as an error | apply: `400` on the policy, or two identical-looking conditions in the console | Give each condition its own `display_name` |
+| Scheduler to Cloud Run job (`app_access = "iap"`) | The `:run` URL and OAuth token are the documented shape ([Cloud Run, "Execute jobs on a schedule"](https://cloud.google.com/run/docs/execute/jobs-on-schedule)); the job needs `run.invoker` for `claude-scheduler`. Checked statically. NOT checked: that the Run API accepts an empty `{}` body in your project (unverified) | Scheduler job shows `PERMISSION_DENIED` (missing `run.invoker` on the job) or `NOT_FOUND` (job name or region differs) | Compare the job's URL with `gcloud run jobs describe claude-budget-tick --region <region>`; re-grant `roles/run.invoker` on the job |
+| Serverless NEG before the service (`app_domain`) | The load-balancing docs say a serverless NEG "can only point to an existing" Cloud Run service ([Serverless NEG overview](https://cloud.google.com/load-balancing/docs/negs/serverless-neg-concepts)). Our NEG is created first to avoid a dependency cycle, so the first apply may be refused (unverified; the docs wording suggests it) | apply: `Error creating RegionNetworkEndpointGroup` mentioning the Cloud Run service not found | Set `app_domain = null`, apply (direct IAP creates the service), set `app_domain` again, apply |
+| Internal load balancer in front of Cloud Run | Needs an ACTIVE proxy-only subnet (`REGIONAL_MANAGED_PROXY`, /26 or larger) in the rule's region and VPC; one per region and VPC; serverless NEGs allow no health checks ([Serverless NEG overview](https://cloud.google.com/load-balancing/docs/negs/serverless-neg-concepts)). Checked statically for what this plan creates; NOT checked: a proxy-only subnet that already exists in your VPC | apply: `An active proxy-only subnetwork is required` or a duplicate-subnet error | Import the existing subnet or set `proxy_only_subnet_cidr` to its range |
+| `invoker_iam_disabled`, `default_uri_disabled` | `invoker_iam_disabled` can be blocked by the organization policy `constraints/run.managed.requireInvokerIam` ([Cloud Run, managing access](https://cloud.google.com/run/docs/securing/managing-access)). `default_uri_disabled`: no page found, unverified | apply: organization policy violation on the gateway service; or a `run.app` call that still works | Ask the org admin for an exception on the gateway's project; or use `gateway_exposure = "run_app"` |
+| IAP on Cloud Run, OAuth client | The IAP OAuth Admin API (`google_iap_brand`, `google_iap_client`) was shut down on 2026-03-19 ([IAP deprecations](https://cloud.google.com/iap/docs/deprecations)), so Terraform cannot create the client; the suite refuses those resources. Whether a backend service accepts IAP without `oauth2_client_id` (Google-managed client) in your org: unverified | apply: `400 ... oauth2ClientId` on the backend service | Create a Web client in the console, set `iap_oauth_client_id` / `iap_oauth_client_secret` |
+| Cloud Run probes | Documented limits are checked statically ([Cloud Run health checks](https://cloud.google.com/run/docs/configuring/healthchecks): timeout at most the period, startup period 1-600 s and total at most 600 s, probe port is the container port) | deploy: `InvalidArgument` on the probe | Lower `failure_threshold` or the period |
+| Cloud SQL | Tier names and custom memory (0.9-6.5 GB per vCPU, a multiple of 256 MB, at least 3.75 GB) are checked ([Instance settings](https://cloud.google.com/sql/docs/postgres/instance-settings)). NOT checked: whether a shared-core tier (`db-f1-micro`, trial) can be `REGIONAL`; the docs do not say (unverified). `ENCRYPTED_ONLY` and the gateway's `sslmode=require` agree (tested); the live connection is unverified until the gateway starts | apply: `Invalid tier`; run time: the gateway's `/readyz` fails with an SSL or `pg_hba` error | Pick a documented tier; read the revision's logs |
+| Provider 7.x | The 7.0 upgrade guide lists no change for the arguments used here (`google_project_service.disable_on_destroy` is set explicitly; no `enable_flow_logs`, `retention_period` or `require_ssl`; [upgrade guide](https://github.com/hashicorp/terraform-provider-google/blob/main/website/docs/guides/version_7_upgrade.html.markdown)); `iap_enabled` on Cloud Run needs the provider from about 7.30 (`versions.tf`). A newer 7.x may deprecate more: read the plan warnings | plan or apply: `Unsupported argument` or a deprecation warning | `terraform init -upgrade`, read the plan before applying |
+
+Edge audit (resource by resource; verdict **V** = matches a Google page we read, **U** = unverified until applied, **F** = fixed in this pass):
+
+| Resource / area | Live-API precondition (what a plan cannot prove) | Verdict | Symptom and remedy |
+|---|---|---|---|
+| `google_project_service` for compute, dns, iap, run, cloudscheduler, servicenetworking, bigquery | the API is enabled before the resource is created; `serviceusage` and `cloudresourcemanager` must already be on to enable the others (new projects have them) | V (static rule: every resource family has its API) | `API has not been used` -> `gcloud services enable <api>` |
+| Direct IAP: `iap_enabled` on the Cloud Run service | Generally available since 2026-03-13 ([Cloud Run release notes](https://cloud.google.com/run/docs/release-notes)); the page's own Terraform sets no `launch_stage`. `iap_launch_stage` therefore defaults to `GA` (it used to be `BETA`: asking for BETA on a GA feature makes Cloud Run report GA back, a permanent plan diff) | F | plan shows `launch_stage` changing every time -> keep the default `GA` |
+| Direct IAP: who can sign in | The Google-managed OAuth client serves **internal** users only; external users or a project without an organisation need a custom OAuth client bound to the service ([Customize the OAuth configuration](https://cloud.google.com/iap/docs/custom-oauth-configuration): `gcloud iap settings set ... --resource-type=cloud-run`). Terraform does not set it for direct IAP (the provider docs list no `cloud_run` resource name for `google_iap_settings`; unverified) | F (step added to `edge_next_steps` and the example READMEs); the exact resource name is U | Google "Error 400 ... OAuth" on sign-in -> create the client, run the `gcloud iap settings set` command from `terraform output edge_next_steps` |
+| Consent screen / brand | The legacy IAP brand and OAuth client API (`google_iap_brand`, `google_iap_client`) was shut down on 2026-03-19 ([gcloud `iap oauth-brands`](https://cloud.google.com/sdk/gcloud/reference/iap/oauth-brands)); only the console creates the consent screen (Internal in an organisation; External + Testing + test users otherwise) | V (nothing here uses the legacy API; static rule) | sign-in shows a Google OAuth error -> `edge_next_steps` A1 |
+| `google_iap_web_cloud_run_service_iam_member` (direct) vs `google_iap_web_backend_service_iam_member` (custom domain) | `roles/iap.httpsResourceAccessor` is granted on the IAP resource that exists: the Cloud Run service (direct) or the backend service (load balancer). Google: IAP cannot be on both the load balancer and the Cloud Run service; the plan has exactly one | V (static rule) | `403 You don't have access` after sign-in -> the principal is missing there |
+| IAP service agent `service-<N>@gcp-sa-iap` | needs `roles/run.invoker` on the app and must exist first. The GA provider cannot create it (`google_project_service_identity` is google-beta only); Terraform runs `gcloud services identity create --service=iap.googleapis.com` (the GA command Google's page uses; `gcloud beta ...` only as a fallback) on the applying machine. Google's Terraform snippet suggests enabling the IAP API creates the agent too (unverified for the timing) | F (command), U (timing) | `service account ... does not exist` at `app_iap_agent` -> run that command once, apply again |
+| Gateway behind the internal Application Load Balancer, ingress | Google's internal ALB guide uses Cloud Run ingress `internal`; this repo uses `internal-and-cloud-load-balancing`, which also admits any EXTERNAL Application Load Balancer someone creates in the project (the gateway's invoker check is off, so that would be a way in). Whether `internal` alone passes our regional internal ALB: documented, not verified | U (possible hardening: `INGRESS_TRAFFIC_INTERNAL_ONLY` in `run.tf` after a live test) | Keep `compute.restrictLoadBalancerCreationForTypes` limited to the types you use so nobody can add an external load balancer |
+| Regional backend service for the serverless NEG | `protocol = "HTTP"` is the value Google's guide gives ("ignored but required"; the default would be TCP); it was `HTTPS` before this pass. `timeout_sec = 3600`: whether a serverless NEG honours a backend timeout is not stated (a forum answer says it does not apply); Cloud Run's own 3600 s request timeout is what matters for streaming | F (protocol), U (timeout) | long streams cut at 30/60 s -> check the backend service's timeout and Cloud Run's `timeout` |
+| Regional self-managed certificate, regional SSL policy | The internal ALB takes `google_compute_region_ssl_certificate` on a regional target HTTPS proxy ("Certificate maps aren't supported", [internal ALB + Cloud Run](https://cloud.google.com/load-balancing/docs/l7-internal/setting-up-l7-internal-serverless)). The regional SSL policy on an INTERNAL_MANAGED proxy is U; ECDSA P-256 keys are U; the leaf is followed by the CA in `certificate` (a chain, leaf first) | V (resource kind, static rule), U (policy, key type) | apply: `Invalid value for field 'resource.sslPolicy'` -> drop `google_compute_region_ssl_policy` |
+| Proxy-only subnet, forwarding rule, address | one ACTIVE `REGIONAL_MANAGED_PROXY` subnet per region and VPC; the forwarding rule's address comes from the PRIVATE subnet, never the proxy-only one; same VPC and region ([Google](https://cloud.google.com/load-balancing/docs/l7-internal/setting-up-l7-internal-serverless)) | V (static rule) | duplicate or `An active proxy-only subnetwork is required` -> existing subnet: `proxy_only_subnet_cidr` |
+| Private Cloud DNS zone for exactly the hostname | zone `visibility = private` attached to the VPC; the name ends in a dot; clients outside the VPC do not see it. That Cloud Run (the budget app, direct VPC egress, `PRIVATE_RANGES_ONLY`) resolves a private zone of the VPC: Google documents DNS through the VPC for Cloud Run, not verified here | V (zone shape, static rule), U (Cloud Run resolution) | app shows "gateway unreachable" while a VM in the VPC resolves the name -> check the egress setting and the zone's network |
+| `invoker_iam_disabled`, `default_uri_disabled` | the applying identity needs `run.services.setIamPolicy` ([managing access](https://cloud.google.com/run/docs/securing/managing-access)); the organisation constraint `constraints/run.managed.requireInvokerIam` can forbid it; `constraints/run.allowedIngress` must allow the ingress used (`all` for direct IAP, `internal-and-cloud-load-balancing` for the gateway and the custom-domain app). Both features are GA ([release notes](https://cloud.google.com/run/docs/release-notes)) | U (your organisation policy) | apply: organisation policy violation -> `gcloud org-policies describe constraints/<name> --project=<p> --effective` and ask for an exception |
+| IAP members and domain restricted sharing | `constraints/iam.allowedPolicyMemberDomains` rejects `roles/iap.httpsResourceAccessor` for a member outside the allowed domains; the app never uses `allUsers` | U (your organisation policy) | apply: `One or more users named in the policy do not belong to a permitted customer` -> relax the constraint for the project or use members of an allowed domain |
+| Load balancer creation policy | `constraints/compute.restrictLoadBalancerCreationForTypes` values `INTERNAL_HTTP_HTTPS` (regional internal ALB) and `GLOBAL_EXTERNAL_MANAGED_HTTP_HTTPS` ([Google](https://cloud.google.com/load-balancing/docs/org-policy-constraints)) must be allowed | U (your organisation policy) | apply: `Constraint constraints/compute.restrictLoadBalancerCreationForTypes violated` -> ask for the exception |
+| Service-account keys | Nothing here creates a key (workload identity everywhere), so `constraints/iam.disableServiceAccountKeyCreation` cannot block this deployment | V (static rule) | - |
+| Cloud Run job + Cloud Scheduler `:run` | URI `https://run.googleapis.com/v2/projects/<p>/locations/<r>/jobs/<job>:run` with an OAuth (not OIDC) token of a service account that holds `roles/run.invoker` on the job ([Execute jobs on a schedule](https://cloud.google.com/run/docs/execute/jobs-on-schedule): its Terraform example binds an invoker role on the job; the page names no OAuth scope, ours is `cloud-platform`) | V (shape, static rule), U (scope) | Scheduler job `PERMISSION_DENIED` -> grant `roles/run.invoker` on the job to `claude-scheduler`; `UNAUTHENTICATED` -> try another scope |
+| App behind the custom-domain load balancer | managed certificate needs the A record first; the NEG is created before the service (see the row above) | U | `FAILED_NOT_VISIBLE` -> fix the DNS record |

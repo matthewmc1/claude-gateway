@@ -20,7 +20,10 @@ resource "google_compute_region_backend_service" "gateway" {
   name                  = "claude-gateway-backend"
   region                = var.region
   load_balancing_scheme = "INTERNAL_MANAGED"
-  protocol              = "HTTPS"
+  # HTTP is the value Google's own internal-ALB + Cloud Run guide uses for a serverless NEG backend ("ignored but required": the
+  # default would be TCP); the hop to Cloud Run is https regardless. (The app's external backend service keeps HTTPS, as Google's IAP
+  # example does.) Rule encoded in terraform/tests/run.sh.
+  protocol = "HTTP"
   # Matches the gateway's long streaming responses (Cloud Run request timeout is 3600 s too).
   timeout_sec = 3600
 

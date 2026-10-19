@@ -23,23 +23,23 @@ const iso = (ms) => new Date(ms).toISOString();
 let seed = 7;
 const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
 const MODELS = [
-  { alias: 'sonnet', id: 'claude-sonnet-5-5', label: 'Sonnet 5.5', tier: 'default', description: 'Everyday coding. The baseline everyone starts on.', enabled: true, pricePerMTok: { input: null, output: null, cacheRead: null, cacheWrite: null } },
+  { alias: 'sonnet', id: 'claude-sonnet-5-5', label: 'Sonnet 5.5', tier: 'previous', description: 'The newer Sonnet generation, available by name when you want to try it.', enabled: true, pricePerMTok: { input: null, output: null, cacheRead: null, cacheWrite: null } },
   { alias: 'opus', id: 'claude-opus-5-5', label: 'Opus 5.5', tier: 'upgrade', description: 'Hardest problems. Costs more and uses budget faster, so it is an explicit step up.', enabled: true, pricePerMTok: { input: null, output: null, cacheRead: null, cacheWrite: null } },
-  { alias: 'haiku', id: 'claude-haiku-5-5', label: 'Haiku 5.5', tier: 'fast', description: 'Fast and cheap for simple, high-volume tasks.', enabled: true, pricePerMTok: { input: null, output: null, cacheRead: null, cacheWrite: null } },
+  { alias: 'haiku', id: 'claude-haiku-5-5', label: 'Haiku 5.5', tier: 'default', description: 'Fast and cheap. The baseline everyone starts on; step up to Sonnet or Opus when a task needs it.', enabled: true, pricePerMTok: { input: null, output: null, cacheRead: null, cacheWrite: null } },
 ];
 if (E.MOCK_PRICES === '1') MODELS[0].pricePerMTok = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
-// What GET /api/models returns: the usage mixes above only cover the first three, the 4.6 entries are allowed but nobody has chosen them.
-// MOCK_46_DEFAULT=1 shows the catalog after the "4.6 as the default for everyone" recipe (default sonnet-4-6, 4.6 entries pin their family).
+// What GET /api/models returns, as shipped: Haiku 5.5 is the default, Sonnet 4.6 is the Sonnet pin, Sonnet 5.5 and Opus 4.6 are allowed by name.
+// The usage mixes above only cover the first three. MOCK_46_DEFAULT=1 shows the state after the "make Sonnet 4.6 the default" recipe in
+// docs/INSTALL.md (default sonnet-4-6; the tiers swap with haiku, which becomes "fast").
 const none = { input: null, output: null, cacheRead: null, cacheWrite: null };
+const CATALOG_DEFAULT = () => (E.MOCK_46_DEFAULT === '1' ? 'sonnet-4-6' : 'haiku');
 const CATALOG_MODELS = () => {
   const r = E.MOCK_46_DEFAULT === '1';
-  // After the recipe the tiers swap with the pins (the new default is "default"/"upgrade", the replaced one "previous").
-  const tier = (m) => (r && (m.alias === 'sonnet' || m.alias === 'opus') ? 'previous' : m.tier);
   const unpinned = E.MOCK_UNPINNED === '1';   // a legal but suspicious catalog: nothing pins the sonnet family
   return [
-    ...MODELS.map((m) => ({ ...m, tier: tier(m), family: m.alias, pinned: unpinned && m.alias === 'sonnet' ? false : m.alias === 'haiku' || !r })),
-    { alias: 'sonnet-4-6', id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', tier: r ? 'default' : 'previous', family: 'sonnet', pinned: r, description: r ? 'Everyday coding. The baseline everyone starts on.' : 'The previous Sonnet generation, available by name.', enabled: true, pricePerMTok: none },
-    { alias: 'opus-4-6', id: 'claude-opus-4-6', label: 'Opus 4.6', tier: r ? 'upgrade' : 'previous', family: 'opus', pinned: r, description: r ? 'Hardest problems. Costs more and uses budget faster, so it is an explicit step up.' : 'The previous Opus generation, available by name.', enabled: true, pricePerMTok: none },
+    ...MODELS.map((m) => ({ ...m, tier: r && m.alias === 'haiku' ? 'fast' : m.tier, family: m.alias, pinned: m.alias !== 'sonnet' })),
+    { alias: 'sonnet-4-6', id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', tier: r ? 'default' : 'previous', family: 'sonnet', pinned: !unpinned, description: r ? 'Everyday coding. The baseline everyone starts on.' : 'Everyday coding, a step up from Haiku. Available by name; it is the Sonnet the sonnet alias resolves to.', enabled: true, pricePerMTok: none },
+    { alias: 'opus-4-6', id: 'claude-opus-4-6', label: 'Opus 4.6', tier: 'previous', family: 'opus', pinned: false, description: 'The previous Opus generation, available by name. Costs more and uses budget faster.', enabled: true, pricePerMTok: none },
   ];
 };
 const CATALOG_WARNINGS = () => (E.MOCK_UNPINNED === '1' ? ['No enabled model pins the sonnet family: sonnet, sonnet-4-6 are available by name, but the "sonnet" alias is not set for anyone, so `/model sonnet` will be refused. Set "pin": true on one sonnet entry.'] : []);
@@ -135,11 +135,10 @@ function coach(p, b, mixSeries, rec) {
   const opus = mixSeries['claude-opus-5-5'].reduce((a, c) => a + c, 0) / total;
   const fails = rec.filter((r) => r.outcome === 'upstream_error').length;
   const m = b.monthly, wk = b.weekly;
-  if (opus > 0.3) ins.push({ id: 'opus-heavy', severity: 'high', category: 'model', title: `${Math.round(opus * 100)}% of your requests use Opus`, description: 'Opus costs more per request and uses your budget faster. Sonnet handles most everyday coding well. Keep Opus for the hardest problems.', action: './claude-gateway-setup.sh model sonnet', impact: 'Can stretch your weekly budget noticeably' });
+  if (opus > 0.3) ins.push({ id: 'opus-heavy', severity: 'high', category: 'model', title: `${Math.round(opus * 100)}% of your requests use Opus`, description: 'Opus costs more per request and uses your budget faster. Your company default handles most everyday work. Keep Opus for the hardest problems.', action: './claude-gateway-setup.sh downgrade', impact: 'Can stretch your weekly budget noticeably' });
   if (wk.capCents && wk.spendCents / wk.capCents >= 0.85) ins.push({ id: 'weekly-pace', severity: 'high', category: 'budget', title: 'You are close to your weekly limit', description: `You have used ${Math.round(wk.spendCents / wk.capCents * 100)}% of this week's budget. Requests are blocked at 100% until the week resets or an admin raises the cap.`, action: null, impact: null });
   else if (m.capCents && m.spendCents / m.capCents >= 0.6) ins.push({ id: 'monthly-pace', severity: 'medium', category: 'budget', title: 'Monthly spend is ahead of pace', description: 'You have used more than 60% of the monthly budget. If this continues you may reach the limit before the month ends.', action: null, impact: null });
   if (fails >= 2) ins.push({ id: 'errors', severity: 'medium', category: 'reliability', title: `${fails} of your last 25 requests hit provider errors`, description: 'Provider errors are usually temporary capacity limits. Retrying after a short pause normally works; they do not count against your budget.', action: null, impact: null });
-  if (p.mix[2] < 0.2 && p.mix[0] > 0.6) ins.push({ id: 'haiku', severity: 'info', category: 'model', title: 'Try Haiku for quick, simple tasks', description: 'For renames, boilerplate and short questions, Haiku is faster and uses far less budget.', action: '/model haiku', impact: null });
   ins.push({ id: 'telemetry', severity: 'info', category: 'telemetry', title: 'Token and cache coaching needs client telemetry', description: 'Insights about context size and cache hits need telemetry from the Claude Code client, which is not connected yet. The tips above use only the model mix, outcomes and budget pace.', action: null, impact: null });
   return { summary: `Based on your last ${rec.length} requests and this period's budget pace.`, insights: ins };
 }
@@ -242,7 +241,7 @@ http.createServer(async (req, res) => {
     if (r === '/api/models' && isRead) {
       const rows = state.people.map((p) => userRow(p, w));
       const usage = MODELS.map((mm) => { const n = rows.reduce((a, u) => a + u._s[mm.id].reduce((x, c) => x + c, 0), 0); return { model: mm.id, requests: n, ok: Math.round(n * 0.95) }; });
-      return send(res, 200, { default: E.MOCK_46_DEFAULT === '1' ? 'sonnet-4-6' : 'sonnet', models: CATALOG_MODELS(), warnings: CATALOG_WARNINGS(), usage: SOURCE === 'none' ? [] : usage });
+      return send(res, 200, { default: CATALOG_DEFAULT(), models: CATALOG_MODELS(), warnings: CATALOG_WARNINGS(), usage: SOURCE === 'none' ? [] : usage });
     }
     if (r === '/api/audit' && isRead) return send(res, 200, { events: state.audit });
     if (r === '/api/overrides' && isRead) {

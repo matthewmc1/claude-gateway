@@ -60,29 +60,75 @@ exposure and usage. Activity page: audit trail of every cap change.
 * Daily caps are shown read-only; manage them with `scripts/set-limit.sh`.
 * The app only listens on `127.0.0.1` and refuses to start otherwise (see `APP_ALLOW_NON_LOOPBACK`).
 
-## Run the enterprise edge locally
+## Test the IAP + internal load balancer setup locally
 
-The deployed enterprise setup puts the budget app behind Google IAP and the gateway behind an internal load balancer with TLS. You can run the
-**same topology** on a laptop, with no cloud access, to see what engineers and admins will see and to debug origin/CORS/CSRF/TLS problems early:
+The deployed enterprise setup puts the budget app behind Google IAP and the gateway behind an internal load balancer with TLS
+([INSTALL.md](INSTALL.md)). `scripts/edge.sh` runs the **same topology** on your laptop with no cloud access, so you can see what admins and
+engineers will see and debug origin/CSRF/TLS problems before a real apply:
 
-```bash
-scripts/edge.sh up        # certs, local IdP, gateway, ILB + IAP emulators, the app in iap mode (needs the compose Postgres, or EDGE_POSTGRES_URL)
-scripts/edge.sh status    # what answers (the app must refuse requests that bypass IAP: 401; the gateway must refuse an untrusted CA)
-scripts/edge.sh test      # the L6 end-to-end layer (Docker, a headless Chrome for the browser parts); `scripts/edge.sh down` stops only what `up` started
+```
+ browser ──http://app.localhost:19330──▶ IAP emulator ──(signed JWT, Host kept)──▶ budget app (APP_AUTH_MODE=iap)
+ Claude Code ──https://gateway.localhost:19331──▶ ILB emulator (TLS, throwaway CA) ──▶ real `claude gateway` (public_url = that https URL)
+                                                                                   └─▶ local IdP (sign-in), Postgres (database gateway_edge)
 ```
 
-| Open | What it is |
+**Prerequisites:** node 20+, the `claude` binary and `openssl` on PATH, and a Postgres: `docker compose up -d postgres` after `scripts/setup.sh` (the edge uses its own
+database `gateway_edge` on it) or `EDGE_POSTGRES_URL=postgres://...`. Nothing leaves the machine; model replies are canned (`load_test_mode`).
+Ports 19330-19334 (override with `EDGE_APP_PORT`, `EDGE_GATEWAY_PORT`, `EDGE_IDP_PORT`, `EDGE_GATEWAY_INTERNAL_PORT`, `EDGE_APP_INTERNAL_PORT`); everything generated is in `data/edge/` (gitignored).
+
+```bash
+scripts/edge.sh up        # generates certs/config, starts everything, prints URLs and a "what to do next" list
+scripts/edge.sh status    # expected: processes idp gateway ilb iap app; signed-out app 302 -> /_iap/signin; direct /api/users 401; gateway /readyz 200; gateway without the CA refused
+scripts/edge.sh check     # the whole flow with curl, PASS/FAIL per step (expected: "check: 28 passed, 0 failed")
+scripts/edge.sh test      # the automated L6 layer: 18 tests incl. a headless Chrome (needs Docker for a throwaway Postgres; expected RESULT: PASS)
+scripts/edge.sh down      # stops only what `up` started
+```
+
+### What `check` walks through, by hand
+
+```bash
+A=http://app.localhost:19330; CA=data/edge/ca.pem; G=https://gateway.localhost:19331
+curl -s -o /dev/null -w '%{http_code} -> %{redirect_url}\n' $A/                         # 302 -> http://app.localhost:19330/_iap/signin?next=%2F
+curl -s -o /dev/null -w '%{http_code}\n' $A/api/health -H 'accept: application/json'     # 401: no token, no data
+curl -s -c admin.jar -o /dev/null -X POST $A/_iap/signin -H "origin: $A" --data-urlencode email=ada@example.com --data-urlencode next=/   # sign in as the admin
+curl -s -b admin.jar $A/api/health -H 'sec-fetch-site: same-origin'                       # ..."auth":"iap","identity":{"email":"ada@example.com","name":"ada","admin":true}
+W=(-H "origin: $A" -H 'x-app-csrf: 1' -H 'sec-fetch-site: same-origin' -H 'content-type: application/json')
+curl -s -b admin.jar -X PUT $A/api/org/budget "${W[@]}" --data '{"period":"weekly","action":"set","usd":25}'   # 200 {"ok":true,"limit":{...}}  (writes the local gateway_edge database only)
+# the same with a viewer's cookie (sign in as bob@example.com):                            # 403 {"error":"only admins can do this"}
+# cross-site: -H 'origin: http://evil.localhost:1' -H 'sec-fetch-site: cross-site'          # 403 {"error":"cross-origin request refused"}
+# no CSRF header:                                                                           # 403 {"error":"cross-site or non-browser request refused"}
+curl -s -o /dev/null -w '%{http_code}\n' -b admin.jar "$A/api/company?secure_token_test=bad-signature"   # 401 (also: expired wrong-aud wrong-iss wrong-alg unknown-kid too-long no-email garbage none)
+curl --cacert $CA $G/readyz                                                                 # ready
+curl $G/readyz                                                                              # curl: (60) SSL certificate problem: unable to get local issuer certificate
+curl --cacert $CA --tls-max 1.1 $G/readyz                                                   # fails: TLS 1.2+ only
+```
+
+Each line proves our wiring: no data without a token the app itself verified (it ignores the unsigned `x-goog-authenticated-user-*` headers), admin vs viewer from the verified
+email, a write needs the CSRF header **and** a same-origin proof, a tampered token is refused whatever is wrong with it, the gateway answers only over https with a name its
+certificate covers, and its `public_url` matches the `Host` it sees.
+
+### Use a real browser and a real Claude Code
+
+* **Browser.** Open `http://app.localhost:19330` in Chrome, Firefox or Safari. `*.localhost` resolves to loopback, so no hosts-file edit is needed and the browser origin, the `Host` the app
+  receives and `APP_ALLOWED_HOSTS` really are the same name (the property IAP needs). Pick `ada@example.com` (admin) or `bob@example.com` (viewer); change a budget as each. Append
+  `?secure_token_test=bad-signature` to any app URL to watch a tampered token being refused. The app itself is plain http; only the gateway is https.
+* **Gateway page in the browser.** `https://gateway.localhost:19331/device` shows a certificate warning until you trust `data/edge/ca.pem` (macOS: Keychain Access, import, set *Always trust*; remove it afterwards).
+* **Claude Code.** `scripts/edge.sh claude` starts `claude` with its own config dir (`data/edge/claude-config`, so your real `~/.claude` and `.claude-test` are untouched), `forceLoginGatewayUrl` set to the https gateway and the
+  throwaway CA trusted for that one process. Run `/login`, choose *Cloud gateway*, sign in as `alice@example.com` or `bob@example.com` on the local IdP page. By hand:
+  `NODE_EXTRA_CA_CERTS=data/edge/ca.pem CLAUDE_CONFIG_DIR=<dir whose settings.json has forceLoginMethod "gateway" and forceLoginGatewayUrl "https://gateway.localhost:19331"> claude`.
+  (The interactive sign-in was not driven by us; the gateway's `/device` page and OIDC redirect are covered by L6.)
+
+### What this proves, and what it cannot
+
+| Proves (locally) | Cannot prove (needs a real deployment) |
 |---|---|
-| `http://app.localhost:19330` | the budget app behind the **IAP emulator**: sign in by picking an email (admins are `EDGE_ADMINS`, default `ada@example.com`; others are viewers). The app only trusts the signed `x-goog-iap-jwt-assertion`. Add `?secure_token_test=bad-signature` to a URL to send a broken token and watch the app refuse it. |
-| `https://gateway.localhost:19331` | the gateway behind the **ILB emulator**: TLS with a throwaway CA (`data/edge/ca.pem`, `curl --cacert ...`), `public_url` is this https URL, `/device` sign-in is served under it. Sign in with `alice@example.com` or `bob@example.com` on the local IdP page. |
+| The app refuses everything without a valid ES256 token (`iss`, `aud`, `exp`/`iat`, `kid`, `alg` checks), ignores unsigned headers, separates admin and viewer | That Google's keys at `https://www.gstatic.com/iap/verify/public_key-jwk` verify our code path in production (the emulator signs with its own key; Google's key rotation, `hd`/`sub` values for your accounts) |
+| One origin end to end: browser origin == `Host` == allow-list, CSRF and Fetch-Metadata rules, cross-site writes fail | The exact `IAP_AUDIENCE` string Google puts in `aud` for your service (we follow Google's documented formats; a mismatch shows as `iap.denied reason=aud` in the app log) |
+| The header name `x-goog-iap-jwt-assertion`, JWT claim shapes and lifetimes as Google documents them | The real consent screen, the Google sign-in page, custom OAuth client binding, the IAP service agent, org policies |
+| TLS trust: the gateway answers only over https with the generated CA, name checks, TLS 1.2+, `public_url` equals the `Host`, `X-Forwarded-For` reaches the gateway | The real internal Application Load Balancer, private DNS from Cloud Run and from your VPN, Google's `X-Forwarded-For` layout, Claude Code's leaf pinning and private-address check against these certificates (`gateway.localhost` is loopback, which Claude Code accepts; a corporate hostname resolving to a private IP is the real case) |
+| The real `claude gateway` binary runs with this config and serves `/readyz`, `/device`, admin APIs | A real model reply through Vertex |
 
-Browser origin, the `Host` the app sees and the allow-list are all `http://app.localhost:19330`, which is exactly what makes IAP work without a proxy.
-`*.localhost` resolves to loopback in browsers and Node. Replies are canned (`load_test_mode`), so nothing is sent to Vertex; state lives in `data/edge/` and the
-`gateway_edge` database. Ports can be changed with `EDGE_APP_PORT`, `EDGE_GATEWAY_PORT`, `EDGE_IDP_PORT`, `EDGE_GATEWAY_INTERNAL_PORT`, `EDGE_APP_INTERNAL_PORT`.
-
-**What is only emulated.** The emulators are not Google. They prove our wiring (one origin, JWT verification, CSRF defence, TLS trust, `public_url` vs `Host`), not
-Google's own behaviour: real IAP sign-in, real key rotation, the real internal Application Load Balancer, real certificates, and Claude Code's gateway-certificate
-pinning and "private address only" check are unverified until you deploy. Never point the emulators at anything but this machine.
+Never point the emulators at anything but this machine.
 
 ## Vertex requirements (the usual first-run failures)
 

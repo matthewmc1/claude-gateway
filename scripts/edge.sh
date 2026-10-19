@@ -8,6 +8,8 @@
 #   scripts/edge.sh up        generate certs/config, start everything, print URLs
 #   scripts/edge.sh down      stop ONLY what `up` started (pids in data/edge/pids)
 #   scripts/edge.sh status    what is running and answering, and the URLs
+#   scripts/edge.sh check     a curl walk-through with PASS/FAIL per step (sign in as admin and viewer, writes, CSRF, tampered tokens, TLS, /readyz)
+#   scripts/edge.sh claude    Claude Code (isolated config dir, throwaway CA trusted for this one process) pointed at the https gateway
 #   scripts/edge.sh test      the L6 end-to-end layer (needs Docker for a throwaway Postgres; `scripts/e2e.sh l6`)
 #
 # `up` needs: node 20+, the `claude` binary and `openssl` on PATH, and a Postgres: the compose one (scripts/setup.sh writes .env, then
@@ -29,6 +31,7 @@ die() { printf 'edge: %s\n' "$*" >&2; exit 1; }
 # what each tracked process must look like, so `down` never signals a recycled pid
 expect() { case "$1" in idp) echo 'idp-emulator.mjs';; ilb) echo 'ilb-emulator.mjs';; iap) echo 'iap-emulator.mjs';; app) echo 'api/server.mjs';; gateway) echo 'claude';; esac; }
 alive() { local p="$2"; kill -0 "$p" 2>/dev/null && ps -p "$p" -o command= 2>/dev/null | grep -q -- "$(expect "$1")"; }
+is_up() { case " $(running_names | tr '\n' ' ') " in *" $1 "*) return 0;; esac; return 1; }
 running_names() { [ -f "$PIDS" ] || return 0; while read -r n p; do [ -n "${p:-}" ] && alive "$n" "$p" && echo "$n"; done <"$PIDS"; }
 
 start() {  # start <name> <command...>: background, logs to data/edge/logs/<name>.log, pid recorded
@@ -81,10 +84,18 @@ cmd_up() {
   say "  Local IdP    http://127.0.0.1:$EDGE_IDP_PORT   (device sign-in: pick alice@example.com or bob@example.com)"
   say "  Logs         $LOGS/      Secrets (mode 600)  $D/secrets.json"
   say ""
-  say "  Try Claude Code against it (isolated config; trust the CA for this one process):"
-  say "    NODE_EXTRA_CA_CERTS=$D/ca.pem GATEWAY_URL=$GW_URL ./scripts/claude-dev.sh      # unverified with the real Claude Code binary"
-  say "  Probe from the shell:   curl --cacert $D/ca.pem $GW_URL/readyz      curl -i $APP_URL/   (302 to the sign-in page)"
-  say "  Stop:   scripts/edge.sh down        Test:   scripts/edge.sh test"
+  say "  WHAT TO DO NEXT (copy/paste):"
+  say "   1. Browser:  open $APP_URL  -> the IAP emulator asks who you are -> pick ada@example.com (admin: can change budgets) or bob@example.com (viewer: read-only)."
+  say "                Change a budget as bob: refused (403). As ada: saved. Add ?secure_token_test=bad-signature to a URL: the app answers 401 (tampered token)."
+  say "                A real browser trusts *.localhost already; no hosts-file edit. The browser needs no CA for the app (plain http), only the gateway is https."
+  say "   2. Shell:    scripts/edge.sh check          # the same flow with curl, PASS/FAIL per step"
+  say "   3. Claude Code against the https gateway (isolated config; your real ~/.claude and .claude-test are untouched):"
+  say "                scripts/edge.sh claude         # then /login -> Cloud gateway -> sign in as alice@example.com or bob@example.com on the IdP page"
+  say "                (or by hand: CLAUDE_CONFIG_DIR=<dir with settings.json forceLoginGatewayUrl=$GW_URL> NODE_EXTRA_CA_CERTS=$D/ca.pem claude)"
+  say "                Browser opened by /login shows the gateway page over https: your browser warns about the throwaway CA unless you trust $D/ca.pem"
+  say "                (macOS: Keychain Access -> import -> set 'Always trust'; or just click through the warning for this local test)."
+  say "   4. Probe:    curl --cacert $D/ca.pem $GW_URL/readyz      curl -i $APP_URL/   (302 to the sign-in page)"
+  say "  Stop:   scripts/edge.sh down        Full automated test:   scripts/edge.sh test"
 }
 
 cmd_down() {
@@ -112,10 +123,66 @@ cmd_status() {
   say "IdP discovery:                               $(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "http://127.0.0.1:$EDGE_IDP_PORT/.well-known/openid-configuration" || echo unreachable)"
 }
 
+cmd_claude() {
+  is_up gateway || die "the edge is not running (scripts/edge.sh up)"
+  command -v claude >/dev/null || die "the claude binary is not on PATH"
+  local cfg="$D/claude-config"; mkdir -p "$cfg"
+  printf '{\n  "forceLoginMethod": "gateway",\n  "forceLoginGatewayUrl": "%s"\n}\n' "$GW_URL" >"$cfg/settings.json"
+  unset ANTHROPIC_API_KEY ANTHROPIC_BASE_URL CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_BEDROCK
+  say "edge: Claude Code with config dir $cfg, gateway $GW_URL, extra CA $D/ca.pem (this process only). /login -> Cloud gateway."
+  CLAUDE_CONFIG_DIR="$cfg" NODE_EXTRA_CA_CERTS="$D/ca.pem" exec claude "$@"
+}
+
+# A curl walk-through of the whole edge. Each line says what it proves; see docs/LOCAL-DEV.md for what it cannot prove about real Google.
+cmd_check() {
+  is_up app || die "the edge is not running (scripts/edge.sh up)"
+  local ok=0 bad=0 jar_a jar_v body; jar_a="$(mktemp)"; jar_v="$(mktemp)"
+  trap 'rm -f "$jar_a" "$jar_v"' RETURN
+  local ADMIN VIEWER; ADMIN="$(printf '%s' "$EDGE_ADMINS_RESOLVED" | cut -d, -f1)"
+  VIEWER="$(printf '%s' "$EDGE_USERS_RESOLVED" | tr ',' '\n' | grep -vxF "$ADMIN" | head -1)"
+  [ -n "$ADMIN" ] && [ -n "$VIEWER" ] || die "could not work out an admin and a viewer (EDGE_ADMINS / EDGE_USERS)"
+  t() {  # t <label> <expected code> <curl args...>
+    local label="$1" want="$2"; shift 2
+    local got; got="$(curl -s -o "$D/check.body" -w '%{http_code}' --max-time 8 "$@" 2>/dev/null)"; got="${got:-000}"
+    if [ "$got" = "$want" ]; then ok=$((ok+1)); printf '  PASS  %-4s %s\n' "$got" "$label"; else bad=$((bad+1)); printf '  FAIL  got %s, want %s: %s\n        %s\n' "$got" "$want" "$label" "$(head -c 200 "$D/check.body" 2>/dev/null)"; fi
+  }
+  local W=(-H "origin: $APP_URL" -H 'x-app-csrf: 1' -H 'sec-fetch-site: same-origin' -H 'content-type: application/json')
+  local B='{"period":"weekly","action":"set","usd":25}'
+  say "IAP emulator and app (iap mode): $APP_URL"
+  t "signed out, browser navigation: redirected to the emulator's sign-in page" 302 "$APP_URL/"
+  t "signed out, API call (Accept: application/json): 401 from the emulator, like IAP answers a non-browser caller" 401 "$APP_URL/api/health" -H 'accept: application/json'
+  t "bypassing IAP (straight at the app, forged unsigned x-goog-* headers): 401" 401 "http://127.0.0.1:$EDGE_APP_INTERNAL_PORT/api/health" -H "x-goog-authenticated-user-email: accounts.google.com:$ADMIN"
+  t "sign in as $ADMIN (admin)" 302 -c "$jar_a" -X POST "$APP_URL/_iap/signin" -H "origin: $APP_URL" --data-urlencode "email=$ADMIN" --data-urlencode "next=/"
+  t "sign in as $VIEWER (viewer)" 302 -c "$jar_v" -X POST "$APP_URL/_iap/signin" -H "origin: $APP_URL" --data-urlencode "email=$VIEWER" --data-urlencode "next=/"
+  t "admin reads /api/company" 200 -b "$jar_a" "$APP_URL/api/company"
+  t "viewer reads /api/company (read-only access is allowed)" 200 -b "$jar_v" "$APP_URL/api/company"
+  t "admin WRITE (org budget) with same-origin proof + CSRF header: allowed" 200 -b "$jar_a" -X PUT "$APP_URL/api/org/budget" "${W[@]}" --data "$B"
+  t "viewer WRITE: 403 only admins can do this" 403 -b "$jar_v" -X PUT "$APP_URL/api/org/budget" "${W[@]}" --data "$B"
+  t "admin write from another site (Origin evil, Sec-Fetch-Site cross-site): 403" 403 -b "$jar_a" -X PUT "$APP_URL/api/org/budget" -H "origin: http://evil.localhost:1" -H 'x-app-csrf: 1' -H 'sec-fetch-site: cross-site' -H 'content-type: application/json' --data "$B"
+  t "admin write without the CSRF header: 403" 403 -b "$jar_a" -X PUT "$APP_URL/api/org/budget" -H "origin: $APP_URL" -H 'content-type: application/json' --data "$B"
+  t "cross-site READ (Sec-Fetch-Site cross-site): 403" 403 -b "$jar_a" "$APP_URL/api/company" -H 'sec-fetch-site: cross-site'
+  local k; for k in bad-signature expired wrong-aud wrong-iss wrong-alg unknown-kid too-long no-email garbage none; do
+    t "tampered token ($k): 401" 401 -b "$jar_a" "$APP_URL/api/company?secure_token_test=$k"
+  done
+  say "Gateway behind the load-balancer emulator (TLS, throwaway CA): $GW_URL"
+  t "https /readyz with the generated CA: 200" 200 --cacert "$D/ca.pem" "$GW_URL/readyz"
+  t "https /healthz with the generated CA: 200" 200 --cacert "$D/ca.pem" "$GW_URL/healthz"
+  t "https WITHOUT the CA: refused (curl exit 60 shows as 000)" 000 "$GW_URL/readyz"
+  t "a name the certificate does not cover (other.localhost): refused" 000 --cacert "$D/ca.pem" "https://other.localhost:$EDGE_GATEWAY_PORT/readyz"
+  t "TLS 1.1 only: refused" 000 --cacert "$D/ca.pem" --tls-max 1.1 "$GW_URL/readyz"
+  t "plain http to the https port: no answer" 000 --max-time 3 "http://gateway.localhost:$EDGE_GATEWAY_PORT/readyz"
+  say ""
+  say "check: $ok passed, $bad failed.  The last admin write set the organisation weekly default to 25 USD in the local gateway_edge database only."
+  say "Not proven (needs a real deployment): Google's signing keys and audience strings, the real consent screen, the real internal Application Load Balancer, Claude Code's certificate pinning."
+  [ "$bad" -eq 0 ]
+}
+
 case "${1:-}" in
   up) cmd_up;;
   down) cmd_down;;
   status) cmd_status;;
+  check) shift; [ -f "$D/edge.env" ] && . "$D/edge.env"; cmd_check;;
+  claude) shift; cmd_claude "$@";;
   test) shift; exec bash scripts/e2e.sh l6 "$@";;
-  *) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 2;;
+  *) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 2;;
 esac

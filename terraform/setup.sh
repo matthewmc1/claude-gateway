@@ -95,7 +95,8 @@ RE_URL="^(http://(localhost|127\\.0\\.0\\.1|\\[::1\\])|https://(${LABEL}\\.)*${L
 RE_HOST='^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$'
 RE_MEMBER='^((user|group|serviceAccount):[A-Za-z0-9._%+-]+@([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}|domain:([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,})$'
 RE_BUCKET='^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$'
-RE_CLIENT='^[0-9]+-[a-z0-9]+\.apps\.googleusercontent\.com$'
+RE_SECRET_BAD="[[:space:]]"   # same rule as the oidc_client_secret variable validation
+RE_CLIENT='^[0-9]+-[A-Za-z0-9_-]+\.apps\.googleusercontent\.com$'
 
 # ---- offline check: the real validations, run in a scratch copy, with no credentials and no API calls --------------------
 run_check() {   # run_check <tfvars> [secrets-tfvars]
@@ -270,6 +271,10 @@ fi
 V_WS="$(lower "$V_WS")"
 [[ -z "$V_WS" ]] || valid "$RE_DOMAIN" "$V_WS" || die "workspace domain '$V_WS' is not a domain such as example.com"
 
+if [[ -n "$V_WS" && ",$(lower "${V_DOMAINS// /}")," =~ ,(gmail|googlemail)\.com, ]]; then
+  note "warning: a Workspace domain limits Google's account chooser to that domain, so Gmail accounts could not sign in. Remove one of the two."
+fi
+
 # oauth client
 if [[ -z "$V_CLIENT" && $INTERACTIVE == 1 ]]; then
   note "Google OAuth client id: Google cannot create it by API. Leave blank to deploy with a placeholder, then follow the"
@@ -283,6 +288,8 @@ if [[ -n "$V_CLIENT" ]]; then
     IFS= read -rs V_SECRET || V_SECRET=""
     printf '\n' >&2
   fi
+  [[ ! "$V_SECRET" =~ $RE_SECRET_BAD ]] || die "the OAuth client secret contains a space, tab or newline: paste only the secret (Google's looks like GOCSPX-...)"
+  [[ -z "$V_SECRET" || "$V_SECRET" == GOCSPX-* ]] || note "warning: that does not look like a Google client secret (GOCSPX-...). Fine for another identity provider; for Google, sign-in will fail with invalid_client if it is wrong."
 else
   [[ -z "$V_SECRET" ]] || note "warning: an OAuth client secret was given without --client-id, so it is NOT written. Pass the client id too (the secret is read from OIDC_CLIENT_SECRET)."
   V_SECRET=""

@@ -147,6 +147,10 @@ locals {
 resource "terraform_data" "input_checks" {
   lifecycle {
     precondition {
+      condition     = !local.oidc_secret_has_whitespace
+      error_message = "oidc_client_secret contains a space, tab or newline (a classic copy-paste slip: a trailing newline makes Google answer invalid_client at sign-in). Paste only the secret, for example GOCSPX-... for Google. (The value is not shown here on purpose.)"
+    }
+    precondition {
       condition     = length(local.allowed_email_domains) > 0
       error_message = "Set allowed_email_domains (for example [\"example.com\"]) or oidc.google_workspace_domain: only people with an email in these domains can sign in."
     }

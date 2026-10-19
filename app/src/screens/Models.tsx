@@ -7,16 +7,16 @@ import { Card, Chip, CodeBlock, CommandBox, Empty, ErrorState, Notice, Skeleton,
 import { BudgetBar, ShareBar } from '../charts';
 import { Icon } from '../icons';
 import { int, modelShort, pct } from '../format';
-import { catalogProblems, previousRecipe, priceHint, tierInfo, unpinnedFamilyWarnings, usageShares } from '../logic/models';
+import { catalogProblems, previousRecipe, priceHint, switchDefaultRecipe, tierInfo, unpinnedFamilyWarnings, usageShares } from '../logic/models';
 
 const EXAMPLE = `{
-  "alias": "sonnet",
-  "id": "claude-sonnet-5-5",
-  "label": "Sonnet 5.5",
-  "tier": "default",            // default | upgrade | fast | previous (the upgrade step goes to the first "upgrade" entry)
+  "alias": "sonnet-4-6",
+  "id": "claude-sonnet-4-6",
+  "label": "Sonnet 4.6",
+  "tier": "previous",           // default | upgrade | fast | previous (the upgrade step goes to the first "upgrade" entry)
   "family": "sonnet",           // optional: sonnet | opus | haiku (defaults to the alias when it is one of those)
   "pin": true,                  // optional: makes this the model the "sonnet" alias means for everyone (one per family)
-  "description": "Everyday coding.",
+  "description": "Everyday coding, a step up from Haiku.",
   "enabled": true,
   "pricePerMTok": { "input": null, "output": null, "cacheRead": null, "cacheWrite": null }
 }`;
@@ -62,7 +62,7 @@ export function Models({ range, data }: { range: Range; data: DataSel }) {
   if (!res) return <View style={{ gap: 16, flexDirection: 'row', flexWrap: 'wrap' }}>{[0, 1, 2].map((i) => <Card key={i} style={{ flexGrow: 1, flexBasis: 320 }}><Skeleton h={220} /></Card>)}</View>;
   const { total, by, other } = usageShares(res.models, res.usage);
   const defModel = res.models.find((m) => m.alias === res.default);
-  const problems = catalogProblems(res.models, res.default), recipe = previousRecipe(res.models, res.default);
+  const problems = catalogProblems(res.models, res.default), recipe = previousRecipe(res.models, res.default) ?? switchDefaultRecipe(res.models, res.default);
   const warnings = res.warnings ?? unpinnedFamilyWarnings(res.models);
   const parts = [...res.models.map((m) => ({ label: m.label, value: by.get(m.id)?.requests ?? 0, color: modelColor(t, m.id) })), ...(other.length ? [{ label: 'Other', value: other.reduce((s, o) => s + o.requests, 0), color: t.muted }] : [])];
   return (
@@ -88,10 +88,12 @@ export function Models({ range, data }: { range: Range; data: DataSel }) {
           {recipe ? (
             <Card style={{ gap: 8 }}>
               <Txt v="h3">Make {res.models.find((m) => m.alias === recipe.defaultAlias)?.label ?? recipe.defaultAlias} the default for everyone</Txt>
-              <Txt v="small" color="muted" style={{ maxWidth: 680 }}>1. In config/models.json set "default": "{recipe.defaultAlias}".</Txt>
-              <Txt v="small" color="muted" style={{ maxWidth: 680 }}>2. Set {recipe.edits.map((e) => `"pin": ${e.pin} on ${e.alias}`).join(', ')}.</Txt>
-              {recipe.tiers.length ? <Txt v="small" color="muted" style={{ maxWidth: 680 }}>3. Swap the tiers so the cards and the upgrade step follow: {recipe.tiers.map((e) => `"tier": "${e.tier}" on ${e.alias}`).join(', ')}, and reword the descriptions.</Txt> : null}
-              <Txt v="small" color="muted" style={{ maxWidth: 680 }}>{recipe.tiers.length ? '4' : '3'}. Run terraform apply: the gateway policy then starts everyone on it and the family aliases follow the pins. Every other model stays available by name. To keep engineers' own machine policy in step, copy the file to client/models.json, rebuild the installer with scripts/package-client.sh and ask people to run claude-gateway-setup.sh update (and downgrade to reset their own setting).</Txt>
+              {[
+                `In config/models.json set "default": "${recipe.defaultAlias}".`,
+                ...(recipe.edits.length ? [`Set ${recipe.edits.map((e) => `"pin": ${e.pin} on ${e.alias}`).join(', ')}.`] : []),
+                ...(recipe.tiers.length ? [`Swap the tiers so the cards and the upgrade step follow: ${recipe.tiers.map((e) => `"tier": "${e.tier}" on ${e.alias}`).join(', ')}, and reword the descriptions.`] : []),
+                'Run terraform apply: the gateway policy then starts everyone on it and the family aliases follow the pins. Every other model stays available by name. To keep engineers\' own machine policy in step, copy the file to client/models.json, rebuild the installer with scripts/package-client.sh and ask people to run claude-gateway-setup.sh update (and downgrade to reset their own setting). The default model must be enabled in Vertex Model Garden, or every session fails.',
+              ].map((text, i) => <Txt key={i} v="small" color="muted" style={{ maxWidth: 680 }}>{i + 1}. {text}</Txt>)}
             </Card>
           ) : null}
         </>

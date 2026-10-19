@@ -20,7 +20,7 @@ data "google_project" "this" {
 # google-beta only). Ordering that Terraform CAN express: the iap API is enabled first (google_project_service.apis), then this step asks
 # Google to create the agent, then the grant waits for the service (direct IAP: iap_enabled is set on it) or the backend service (load
 # balancer), which are the places that make Google create it. The command is best effort (gcloud may be missing on the machine that
-# applies, or lack the beta component): its failure is ignored and, if the agent really does not exist yet, the grant below stops with
+# applies, or lack a recent component): its failure is ignored and, if the agent really does not exist yet, the grant below stops with
 # "service account ... does not exist"; run the same command once by hand and apply again (edge_next_steps says so).
 resource "terraform_data" "iap_service_agent" {
   count = local.app_iap && var.iap_create_agent_with_gcloud ? 1 : 0
@@ -28,7 +28,8 @@ resource "terraform_data" "iap_service_agent" {
   triggers_replace = [var.project_id]
 
   provisioner "local-exec" {
-    command    = "gcloud beta services identity create --service=iap.googleapis.com --project='${var.project_id}' || echo 'IAP service agent: could not run gcloud (see edge_next_steps); continuing'"
+    # GA command first (Google's IAP-for-Cloud-Run page uses `gcloud services identity create`); the beta one only as a fallback for old gcloud.
+    command    = "gcloud services identity create --service=iap.googleapis.com --project='${var.project_id}' || gcloud beta services identity create --service=iap.googleapis.com --project='${var.project_id}' || echo 'IAP service agent: could not run gcloud (see edge_next_steps); continuing'"
     on_failure = continue
   }
 

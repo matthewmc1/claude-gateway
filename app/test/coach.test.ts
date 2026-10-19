@@ -26,5 +26,5 @@ test('labels and counts', () => {
 import { isCommand } from '../src/logic/coach.ts';
 test('isCommand separates copyable commands from advice sentences', () => {
   for (const c of ['./claude-gateway-setup.sh model sonnet', 'claude-gateway-setup.sh upgrade', '/model opus', '/effort high', 'bash scripts/set-limit.sh']) assert.equal(isCommand(c), true, c);
-  for (const s of ['Slow down on the premium model or ask an admin to adjust the cap.', 'Keep Opus 5.5 for hard problems and use Sonnet 5.5 for routine edits.', '', null, undefined]) assert.equal(isCommand(s as any), false, String(s));
+  for (const s of ['Slow down on the premium model or ask an admin to adjust the cap.', 'Keep Opus 5.5 for hard problems and use Haiku 5.5 for routine edits.', '', null, undefined]) assert.equal(isCommand(s as any), false, String(s));
 });

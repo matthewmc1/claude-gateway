@@ -75,11 +75,11 @@ PIN_ENV = tuple((f, "ANTHROPIC_DEFAULT_%s_MODEL" % f.upper()) for f in FAMILIES)
 OWNED_TOP = ("forceLoginMethod", "forceLoginGatewayUrl", "parentSettingsBehavior", "allowedProviders", "availableModels", "enforceAvailableModels")
 BYPASS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN",
           "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_FOUNDRY")
-BUILTIN_CATALOG = {"default": "sonnet-4-6", "models": [
+BUILTIN_CATALOG = {"default": "haiku", "models": [
     {"alias": "sonnet", "id": "claude-sonnet-5-5", "family": "sonnet", "pin": False, "label": "Sonnet 5.5", "tier": "previous", "enabled": True},
     {"alias": "opus", "id": "claude-opus-5-5", "label": "Opus 5.5", "tier": "upgrade", "enabled": True},
-    {"alias": "haiku", "id": "claude-haiku-5-5", "label": "Haiku 5.5", "tier": "fast", "enabled": True},
-    {"alias": "sonnet-4-6", "id": "claude-sonnet-4-6", "family": "sonnet", "pin": True, "label": "Sonnet 4.6", "tier": "default", "enabled": True},
+    {"alias": "haiku", "id": "claude-haiku-5-5", "label": "Haiku 5.5", "tier": "default", "enabled": True},
+    {"alias": "sonnet-4-6", "id": "claude-sonnet-4-6", "family": "sonnet", "pin": True, "label": "Sonnet 4.6", "tier": "previous", "enabled": True},
     {"alias": "opus-4-6", "id": "claude-opus-4-6", "family": "opus", "label": "Opus 4.6", "tier": "previous", "enabled": True}]}
 BUILTIN_DEFAULTS = {"gatewayUrl": "", "model": "", "effortLevel": "medium", "userSettings": {}, "gatewayInternalNetworks": []}   # model "" = the catalog's default
 DEFAULTS_KEYS = ("gatewayUrl", "model", "effortLevel", "userSettings", "gatewayInternalNetworks")
@@ -816,7 +816,7 @@ set_model() {   # set_model <alias|id>
   say "    Note: if your company's gateway policy sets a starting model, Claude Code gives that policy priority over this setting at launch; inside Claude Code use /model, or start with: claude --model $id"
   case "$tier" in
     upgrade) say "    $label costs more per request and uses your weekly/monthly budget faster. Go back with: $SELF downgrade";;
-    previous) say "    $label is not the company default (the entry it replaced). Go back to the company default with: $SELF downgrade";;
+    previous) say "    $label is not the company default (an older entry, available by name). Go back to the company default with: $SELF downgrade";;
     fast)    say "    $label is the fastest and cheapest; use it for simple, high-volume tasks.";;
   esac
 }

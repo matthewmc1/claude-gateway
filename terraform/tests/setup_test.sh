@@ -8,6 +8,7 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TF_SRC="$(cd "$HERE/.." && pwd)"
+REAL_SECRETS_BEFORE="$(cksum < "$TF_SRC/secrets.auto.tfvars" 2>/dev/null || echo none)"   # a real file may exist (the live deployment); tests must not change it
 REPO="$(cd "$TF_SRC/.." && pwd)"
 command -v rsync >/dev/null || { echo "missing tool: rsync" >&2; exit 2; }
 FULL="${SETUP_TEST_FULL:-1}"
@@ -242,7 +243,7 @@ else
 fi
 
 echo; echo "== real files untouched"
-check "the real terraform/ dir has no secrets.auto.tfvars written by the tests" "[[ ! -e '$TF_SRC/secrets.auto.tfvars' ]]"
+check "the real terraform/ dir's secrets.auto.tfvars was not created, changed or removed by the tests" "[[ \"\$(cksum < '$TF_SRC/secrets.auto.tfvars' 2>/dev/null || echo none)\" == '$REAL_SECRETS_BEFORE' ]]"
 check "no terraform.tfvars.bak files in the real terraform/ dir" "[[ -z \$(ls '$TF_SRC'/terraform.tfvars.bak* 2>/dev/null) ]]"
 
 printf '\nsetup.sh: %d passed, %d failed\n' "$PASS" "$FAIL"

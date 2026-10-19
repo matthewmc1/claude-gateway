@@ -117,11 +117,11 @@ function ChangeModel() {
     <Card style={{ gap: 16 }}>
       <View style={{ gap: 4 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}><Icon name="terminal" size={18} color={t.accent} /><Txt v="h3">Change your model</Txt></View>
-        <Txt v="small" color="muted" style={{ maxWidth: 700 }}>You start on your company's default model (see Models). Moving up is your choice: Opus costs more per request and uses your budget faster. Run these in a terminal on your own machine, from the folder where you keep the setup script.</Txt>
+        <Txt v="small" color="muted" style={{ maxWidth: 700 }}>You start on your company's default model (see Models), which may be a lighter, cheaper model than you want for a hard task. Moving up is your choice: Sonnet is a step up, and Opus costs the most per request and uses your budget fastest. Run these in a terminal on your own machine, from the folder where you keep the setup script.</Txt>
       </View>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 18 }}>
         {step('1', 'Step up to Opus', './claude-gateway-setup.sh upgrade', 'Switches to the upgrade model your admin chose. Your company policy may still decide the starting model of a new session.')}
-        {step('2', 'Back to the baseline', './claude-gateway-setup.sh model sonnet', 'Also: opus, haiku.')}
+        {step('2', 'Back to the company default', './claude-gateway-setup.sh downgrade', 'Undoes your own model choice. To pick by name instead: model sonnet, model opus or model haiku.')}
         {step('3', 'Set thinking effort', './claude-gateway-setup.sh effort high', 'low, medium, high or xhigh. More effort uses more budget.')}
         {step('4', 'Just this session', '/model opus', 'Type it inside Claude Code. It applies to the current session only; /effort high works the same way.')}
       </View>

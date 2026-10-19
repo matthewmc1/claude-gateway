@@ -163,9 +163,13 @@ variable "oidc" {
     condition = (
       var.oidc.client_id == null || var.oidc.client_id == "" ||
       !can(regex("^https://accounts\\.google\\.com/?$", var.oidc.issuer)) ||
-      can(regex("^[0-9]+-[a-z0-9]+\\.apps\\.googleusercontent\\.com$", var.oidc.client_id))
+      can(regex("^[0-9]+-[A-Za-z0-9_-]+\\.apps\\.googleusercontent\\.com$", var.oidc.client_id))
     )
     error_message = "oidc.client_id is not a Google OAuth client ID. It looks like 123456789012-abc123def456.apps.googleusercontent.com. Create a \"Web application\" client at https://console.cloud.google.com/apis/credentials (see `terraform output oidc_setup_steps`), or leave client_id out to deploy with a placeholder."
+  }
+  validation {
+    condition     = var.oidc.client_id == null || !can(regex("\\s", var.oidc.client_id))
+    error_message = "oidc.client_id contains a space, tab or newline. Paste only the Client ID, with nothing around it."
   }
   validation {
     condition     = var.oidc.google_workspace_domain == null || can(regex("^[a-z0-9.-]+\\.[a-z]{2,}$", var.oidc.google_workspace_domain))
@@ -178,6 +182,8 @@ variable "oidc_client_secret" {
   type        = string
   sensitive   = true
   default     = null
+  # No validation block here on purpose: Terraform 1.5 prints "var.oidc_client_secret is <value>" in a failed validation, even for a
+  # sensitive variable. The whitespace check is a precondition on a derived boolean (terraform_data.input_checks) so the secret never appears.
 }
 
 variable "allowed_email_domains" {

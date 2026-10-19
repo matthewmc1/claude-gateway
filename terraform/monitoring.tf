@@ -132,6 +132,12 @@ locals {
 
   lm = { for k, _ in local.log_metrics : k => "logging.googleapis.com/user/${k}" }
 
+  # Every threshold alert in one uniform shape (a list of filters, one condition each); keeps the for_each maps below a single type.
+  threshold_all = { for k, v in merge(local.threshold_alerts, local.at_max_alert) : k => {
+    name   = v.name, filters = try(v.filters, [v.filter]), aligner = v.aligner, reducer = v.reducer,
+    period = v.period, duration = v.duration, threshold = v.threshold, doc = v.doc
+  } }
+
   # Threshold alerts over a metric. aligner/reducer follow the metric's kind; period and duration are seconds.
   threshold_alerts = {
     gateway-5xx = {
@@ -186,7 +192,7 @@ locals {
     }
     security-denials = {
       name      = "Claude gateway: auth and admin denials"
-      filter    = "metric.type=one_of(\"${local.lm.claude_gateway_auth_denied}\", \"${local.lm.claude_gateway_admin_denied}\", \"${local.lm.claude_app_login_failed}\") AND resource.type=one_of(\"cloud_run_revision\", \"cloud_run_job\")"
+      filters   = [for m in ["claude_gateway_auth_denied", "claude_gateway_admin_denied", "claude_app_login_failed"] : "metric.type=\"${local.lm[m]}\" AND resource.type=one_of(\"cloud_run_revision\", \"cloud_run_job\")"] # one condition each: a condition may name only one metric
       aligner   = "ALIGN_SUM"
       reducer   = "REDUCE_SUM"
       period    = 900
@@ -226,7 +232,7 @@ locals {
     }
     scheduler-failures = {
       name      = "Claude budget app: scheduler tick failing"
-      filter    = "metric.type=\"${local.lm.claude_scheduler_failures}\" AND resource.type=one_of(\"cloud_run_revision\", \"cloud_run_job\")"
+      filter    = "metric.type=\"${local.lm.claude_scheduler_failures}\" AND resource.type=\"cloud_scheduler_job\""
       aligner   = "ALIGN_SUM"
       reducer   = "REDUCE_SUM"
       period    = 600
@@ -319,22 +325,26 @@ resource "google_monitoring_alert_policy" "app_events" {
 
   notification_channels = [for c in google_monitoring_notification_channel.email : c.id]
 
-  conditions {
-    display_name = each.value.name
-    condition_threshold {
-      filter          = "${length(each.value.metric) == 1 ? "metric.type=\"${local.lm[each.value.metric[0]]}\"" : "metric.type=one_of(${join(", ", [for m in each.value.metric : "\"${local.lm[m]}\""])})"} AND resource.type=one_of(\"cloud_run_revision\", \"cloud_run_job\")"
-      comparison      = "COMPARISON_GT"
-      threshold_value = each.value.min_count - 1
-      duration        = "0s"
+  # one condition per metric (a condition may name only one metric); the policy fires when any of them passes the count
+  dynamic "conditions" {
+    for_each = each.value.metric
+    content {
+      display_name = "${each.value.name} (${conditions.value})"
+      condition_threshold {
+        filter          = "metric.type=\"${local.lm[conditions.value]}\" AND resource.type=one_of(\"cloud_run_revision\", \"cloud_run_job\")"
+        comparison      = "COMPARISON_GT"
+        threshold_value = each.value.min_count - 1
+        duration        = "0s"
 
-      aggregations {
-        alignment_period     = "${each.value.period}s"
-        per_series_aligner   = "ALIGN_SUM"
-        cross_series_reducer = "REDUCE_SUM"
-      }
+        aggregations {
+          alignment_period     = "${each.value.period}s"
+          per_series_aligner   = "ALIGN_SUM"
+          cross_series_reducer = "REDUCE_SUM"
+        }
 
-      trigger {
-        count = 1
+        trigger {
+          count = 1
+        }
       }
     }
   }
@@ -415,29 +425,32 @@ resource "google_logging_metric" "m" {
 }
 
 resource "google_monitoring_alert_policy" "threshold" {
-  for_each     = var.enable_monitoring ? merge(local.threshold_alerts, local.at_max_alert) : {}
+  for_each     = var.enable_monitoring ? local.threshold_all : {}
   display_name = each.value.name
   combiner     = "OR"
   enabled      = true
 
   notification_channels = [for c in google_monitoring_notification_channel.email : c.id]
 
-  conditions {
-    display_name = each.value.name
-    condition_threshold {
-      filter          = each.value.filter
-      comparison      = "COMPARISON_GT"
-      threshold_value = each.value.threshold
-      duration        = "${each.value.duration}s"
+  dynamic "conditions" {
+    for_each = each.value.filters
+    content {
+      display_name = length(each.value.filters) > 1 ? "${each.value.name} (${conditions.key + 1} of ${length(each.value.filters)})" : each.value.name
+      condition_threshold {
+        filter          = conditions.value
+        comparison      = "COMPARISON_GT"
+        threshold_value = each.value.threshold
+        duration        = "${each.value.duration}s"
 
-      aggregations {
-        alignment_period     = "${each.value.period}s"
-        per_series_aligner   = each.value.aligner
-        cross_series_reducer = each.value.reducer
-      }
+        aggregations {
+          alignment_period     = "${each.value.period}s"
+          per_series_aligner   = each.value.aligner
+          cross_series_reducer = each.value.reducer
+        }
 
-      trigger {
-        count = 1
+        trigger {
+          count = 1
+        }
       }
     }
   }

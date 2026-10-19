@@ -48,7 +48,7 @@ managed:
     - match: {}
       code:
         enforceAvailableModels: true
-        availableModels: [claude-sonnet-4-6, claude-sonnet-5-5, claude-opus-5-5, claude-haiku-5-5, claude-opus-4-6]   # first entry is the Default (Sonnet 4.6); the rest are allowed by name
+        availableModels: [claude-haiku-5-5, claude-sonnet-5-5, claude-opus-5-5, claude-sonnet-4-6, claude-opus-4-6]   # first entry is the Default (Haiku 5.5); the rest are allowed by name
         # Telemetry content flags. Everything stays redacted by default; enabling
         # prompt/response capture is a privacy decision for the team to make
         # explicitly, so it is NOT turned on here.

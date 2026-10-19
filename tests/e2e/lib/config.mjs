@@ -28,7 +28,13 @@ export function modelPolicy(cat = readCatalog()) {
   for (const m of enabled) if (m.pinned) env[`ANTHROPIC_DEFAULT_${m.family.toUpperCase()}_MODEL`] = m.id;
   return { availableModels: ordered.map((m) => m.id), model: ordered[0].id, env, catalog: cat };   // model = the explicit starting model (default entry)
 }
-// The "run 4.6 as the default for everyone" recipe applied to a catalog.
+// The "make Sonnet 4.6 the default" recipe from docs/INSTALL.md applied to a catalog: only the default and the tiers change, the pins stay.
+export function sonnet46Default(cat = readCatalog()) {
+  const c = JSON.parse(JSON.stringify(cat)); c.default = 'sonnet-4-6';
+  for (const m of c.models) { if (m.alias === 'sonnet-4-6') m.tier = 'default'; if (m.alias === 'haiku') m.tier = 'fast'; }
+  return c;
+}
+// The "run 4.6 as the default for everyone" recipe applied to a catalog (Sonnet 4.6 default and both 4.6 entries pinned).
 export function recipe46(cat = readCatalog()) {
   const c = JSON.parse(JSON.stringify(cat)); c.default = 'sonnet-4-6';
   for (const m of c.models) { if (m.alias === 'sonnet' || m.alias === 'opus') m.pin = false; if (m.alias === 'sonnet-4-6' || m.alias === 'opus-4-6') m.pin = true; }

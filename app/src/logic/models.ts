@@ -69,16 +69,33 @@ export function modelRole(m: Pick<ModelInfo, 'alias' | 'enabled' | 'family' | 'p
 export type Recipe = { defaultAlias: string; edits: { alias: string; pin: boolean }[]; tiers: { alias: string; tier: string }[] };
 export function previousRecipe(models: Pick<ModelInfo, 'alias' | 'tier' | 'enabled' | 'family' | 'pinned'>[], def: string): Recipe | null {
   const prev = models.filter((m) => m.tier === 'previous' && m.enabled && m.family && !m.pinned);
-  if (!prev.length) return null;
+  // Only offered when the default's own family has a previous generation to go back to (Sonnet 5.5 default, Sonnet 4.6 waiting). With another
+  // family as the default (Haiku as shipped) "previous" entries are just allowed-by-name extras, and switchDefaultRecipe is the useful hint.
+  const defFamily = models.find((m) => m.alias === def)?.family;
+  if (!prev.length || !defFamily || !prev.some((p) => p.family === defFamily)) return null;
   const edits: Recipe['edits'] = [], tiers: Recipe['tiers'] = [];
   for (const p of prev) {
     const cur = models.find((m) => m.pinned && m.family === p.family && m.enabled);
     edits.push({ alias: p.alias, pin: true });
     if (cur) { edits.push({ alias: cur.alias, pin: false }); if (cur.tier !== 'previous') { tiers.push({ alias: p.alias, tier: cur.tier }, { alias: cur.alias, tier: 'previous' }); } }
   }
-  const defFamily = models.find((m) => m.alias === def)?.family;
-  const first = prev.find((p) => p.family === defFamily) ?? prev.find((p) => p.family === 'sonnet') ?? prev[0];
+  const first = prev.find((p) => p.family === defFamily)!;
   return { defaultAlias: first.alias, edits, tiers };
+}
+
+/**
+ * How to make another model the default when it is ALREADY a pinned family model (Sonnet 4.6 while Haiku 5.5 is the default, or Haiku again
+ * when Sonnet is): only "default" and the tiers change, no pins. The new default takes the default tier; the replaced one becomes "fast" when it
+ * is a Haiku, else "previous". Null when there is no such entry. Opus-like "upgrade" entries are never offered as a starting model.
+ */
+export function switchDefaultRecipe(models: Pick<ModelInfo, 'alias' | 'tier' | 'enabled' | 'family' | 'pinned'>[], def: string): Recipe | null {
+  const cur = models.find((m) => m.alias === def && m.enabled);
+  const cands = models.filter((m) => m.enabled && m.pinned && m.family && m.alias !== def && m.tier !== 'upgrade');
+  if (!cur || !cands.length) return null;
+  const next = cands.find((m) => m.family === 'sonnet') ?? cands[0];
+  const tiers: Recipe['tiers'] = [];
+  if (cur.tier !== next.tier) tiers.push({ alias: next.alias, tier: cur.tier }, { alias: cur.alias, tier: cur.family === 'haiku' ? 'fast' : 'previous' });
+  return { defaultAlias: next.alias, edits: [], tiers };
 }
 
 /**

@@ -109,5 +109,5 @@ app_image_tag = "20260101120000"                 # REQUIRED for a full apply: th
 # org_id          = "123456789012"
 
 # ============================== ENGINEER INSTALL ======================================================================
-# client_default_effort = "medium"   # low | medium | high | xhigh
+# client_default_effort = "medium"   # low | medium | high | xhigh; one thinking-effort setting for every model, not per model
 # write_client_defaults = false      # also write ../client/defaults.json for the installer

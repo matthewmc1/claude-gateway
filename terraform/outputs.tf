@@ -76,20 +76,27 @@ output "oidc_setup_steps" {
        - Everyone in one Google Workspace / Cloud Identity organization: choose Audience "Internal".
          Only accounts in your organization can sign in; no review needed.
        - Personal Gmail accounts, or people outside the organization: choose "External", leave publishing status
-         "Testing", and add every engineer under "Test users" (up to 100). Testing-mode sign-ins expire after 7 days of
-         refresh-token use, which is fine for a trial; publish the app for production use with external users.
+         "Testing", and add every engineer under "Test users" (up to 100). Anyone not on that list is refused by Google
+         ("Access blocked") before the gateway sees them. Do NOT set oidc.google_workspace_domain for Gmail accounts.
+         (Google's 7-day refresh-token expiry in Testing mode does not apply here: the gateway asks only for the openid,
+         profile and email scopes, which Google exempts.) Do not publish the app while gmail.com is allowed: anyone with
+         a Gmail account could then sign in.
     2. Credentials: ${local.console_credentials_url}
        Create credentials > OAuth client ID > Application type "Web application".
-    3. Authorized redirect URI, exactly (scheme, host, port and path must match public_url):
+    3. Authorized redirect URI, exactly (scheme, host, port and path must match public_url; no trailing slash):
          ${local.redirect_uri}
-       No JavaScript origin is needed.
+       No JavaScript origin is needed. Google accepts http:// only for localhost; any other host needs https:// and a name
+       under a public top-level domain (not .internal / .local / .lan, not a raw IP). Same value:
+       terraform output -raw oidc_redirect_uri
     4. Copy the Client ID (looks like 123456789012-abc123.apps.googleusercontent.com) into terraform.tfvars:
          oidc = { client_id = "<client id>" }
        and the Client secret into terraform/secrets.auto.tfvars (git-ignored, chmod 600) or the environment:
          export TF_VAR_oidc_client_secret='<client secret>'
-       ./setup.sh does both for you.
+       ./setup.sh does both for you. Google shows the secret in full only once, when the client (or an added secret)
+       is created: download the JSON then. Lost it? Add a new secret on the client and use that (docs/OAUTH.md).
     5. terraform apply   (it rolls a new gateway revision with the real client)
     6. Allowed domains: ${join(", ", local.allowed_email_domains)}${local.oidc_is_google && var.oidc.google_workspace_domain != null ? " (the Google account chooser is limited to ${var.oidc.google_workspace_domain})" : ""}.
+    7. Every condition, rotation and troubleshooting: docs/OAUTH.md
   EOT
 }
 

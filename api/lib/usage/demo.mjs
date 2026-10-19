@@ -32,8 +32,8 @@ function shape(hr, [s, e]) {
 export async function create(cfg, { store, aggregator, now = () => Date.now(), seed = SEED } = {}) {
   const models = (cfg.catalog?.models || []).filter((m) => m.alias && m.id);
   const byAlias = new Map(models.map((m) => [m.alias, m]));
-  // A profile says "sonnet"/"opus"/"haiku" (the family). Engineers get the entry that PINS that family (Sonnet 5.5 normally, 4.6 once an admin
-  // runs the 4.6-default recipe), so the demo traffic follows the pin; a catalog without pin information falls back to the alias itself.
+  // A profile says "sonnet"/"opus"/"haiku" (the family). Engineers get the entry that PINS that family (Sonnet 4.6 and Opus 5.5 as shipped, Opus 4.6 once an admin
+  // runs the Opus 4.6 recipe), so the demo traffic follows the pin; a catalog without pin information falls back to the alias itself.
   const pinned = new Map(models.filter((m) => m.pinned === true && m.family).map((m) => [m.family, m]));
   const entryFor = (a) => pinned.get(a) || byAlias.get(a);
   const fallback = byAlias.get(cfg.catalog?.default) || models[0] || { alias: 'sonnet', id: 'claude-sonnet-5-5', tier: 'default' };

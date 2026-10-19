@@ -21,7 +21,7 @@ Terraform does all of it except one console step (the Google OAuth client, below
   Or let Terraform create the project (`create_project`, optional; see below).
 * On your machine: `terraform` 1.5+, `gcloud` (logged in: `gcloud auth login` and `gcloud auth application-default login`),
   `docker` with buildx, `node` 20+ (for the budget-app bundle and the local proxy), `curl`, `gpg`, `jq`.
-* Claude models enabled for your project in the Vertex AI Model Garden, with quota in the region you use
+* Claude models enabled for your project in the Vertex AI Model Garden (the default model, Haiku 5.5 as shipped, is mandatory), with quota in the region you use
   (`global` by default).
 * Terraform enables the APIs it needs (`google_project_service`): Cloud Run, Cloud SQL, Secret Manager, Artifact Registry,
   Vertex AI, Compute, Service Networking, IAM, Logging, Monitoring, Cloud Scheduler, Storage, Resource Manager.
@@ -104,7 +104,8 @@ console. `terraform output oidc_setup_steps` prints the same steps with your pro
 1. **Consent screen** (`terraform output oidc_consent_screen_url`).
    * Everyone is in one Google Workspace / Cloud Identity organization: choose **Internal**. Only that organization's accounts can sign in.
    * Personal Gmail accounts or people outside the organization: choose **External**, keep it in **Testing**, and add each
-     engineer under **Test users** (limit 100). Testing-mode refresh tokens expire after 7 days; fine for a trial, publish the app for production use.
+     engineer under **Test users** (limit 100). Do not set `oidc.google_workspace_domain` for Gmail accounts, and do not publish the app while
+     `gmail.com` is allowed. (Google's 7-day refresh-token limit for Testing apps does not apply: the gateway requests only `openid profile email`.)
 2. **Credentials** (`terraform output oidc_console_url`): Create credentials, OAuth client ID, Web application.
 3. **Authorized redirect URI**: exactly `terraform output -raw oidc_redirect_uri` (`<public_url>/oauth/callback`).
 4. Put the client ID in `terraform.tfvars` (`oidc = { client_id = "..." }`) and the secret in `secrets.auto.tfvars` (`./setup.sh` does both).
@@ -112,6 +113,7 @@ console. `terraform output oidc_setup_steps` prints the same steps with your pro
 
 You can run the first apply **before** the client exists: with no `oidc.client_id`/secret the gateway is configured with a clearly
 labelled placeholder, a warning is printed on every plan, and sign-in simply does not work until you finish the steps.
+Every condition for a working sign-in, secret rotation and troubleshooting: [OAUTH.md](OAUTH.md).
 `oidc.google_workspace_domain` limits Google's account chooser to your Workspace domain (`hd=`) and is the default for
 `allowed_email_domains`. For a company IdP (Okta, Entra) set `oidc.issuer` and use that IdP's client id; any non-empty id is accepted.
 
@@ -188,17 +190,18 @@ the Vertex model `id`, label/tier/description, `enabled`, and optional `pricePer
 Terraform turns it into the gateway policy (`availableModels`, every enabled model, default first, `enforceAvailableModels`, and `model` set explicitly to the default: Anthropic documents that `availableModels` alone does not change a gateway session's default), pins
 `ANTHROPIC_DEFAULT_{SONNET,OPUS,HAIKU}_MODEL` for every engineer, and passes the catalog to the budget app as `MODELS_JSON`.
 
-The catalog ships **Sonnet 4.6** (`claude-sonnet-4-6`) as the default and Sonnet pin, with Sonnet 5.5, Opus 5.5, Haiku 5.5 and **Opus 4.6** (`claude-opus-4-6`) allowed by name (tier `previous` marks an entry that was replaced as the default, or is the older generation).
-Vertex model ids have no date suffix. Every enabled entry is allowed (people pick the 4.6 ones by name: `claude-gateway-setup.sh model sonnet-4-6`),
+The catalog ships **Haiku 5.5** (`claude-haiku-5-5`) as the default, **Sonnet 4.6** (`claude-sonnet-4-6`) as the Sonnet pin and Opus 5.5 as the Opus pin, with Sonnet 5.5 and **Opus 4.6** (`claude-opus-4-6`) allowed by name (tier `previous` marks an entry that was replaced as the default or pin, or is the older generation).
+**The default model must be enabled in Vertex AI Model Garden for your project (Haiku 5.5 as shipped), or every session fails.** Check in Model Garden where Haiku 5.5 is served; this repository does not document it.
+Vertex model ids have no date suffix. Every enabled entry is allowed (people pick the others by name: `claude-gateway-setup.sh model sonnet-4-6`),
 but only an entry that *pins* its family sets `ANTHROPIC_DEFAULT_<FAMILY>_MODEL`. An entry has an optional `family` (`sonnet`, `opus`, `haiku`;
 default: its alias when that is one of them) and `pin` (default: true only when alias == family). At most one entry per family may pin.
 
-**Sonnet 4.6 is already the default.** To also run Opus 4.6 as the Opus pin, give `opus-4-6` `"pin": true` and `opus` `"pin": false`, and swap their `tier` values and descriptions (`opus-4-6` takes `upgrade`, `opus` becomes `previous`). To go back to Sonnet 5.5, set `"default": "sonnet"`, `"pin": true` on `sonnet`, `"pin": false` on `sonnet-4-6`, and swap their tiers. Then `cp config/models.json client/models.json`,
+**Haiku 5.5 is already the default.** To start everyone on Sonnet 4.6 instead, set `"default": "sonnet-4-6"` and swap the tiers (`sonnet-4-6` takes `default`, `haiku` becomes `fast`). To also run Opus 4.6 as the Opus pin, give `opus-4-6` `"pin": true` and `opus` `"pin": false`, and swap their `tier` values and descriptions (`opus-4-6` takes `upgrade`, `opus` becomes `previous`). To go back to Sonnet 5.5 as the default, set `"default": "sonnet"`, `"pin": true` on `sonnet`, `"pin": false` on `sonnet-4-6`, give `sonnet` the tier `default`, `sonnet-4-6` `previous` and `haiku` `fast`. Thinking effort is one global setting, not per model: `client_default_effort` (shipped `medium`) in Terraform, see INSTALL.md section 7 step 3. Then `cp config/models.json client/models.json`,
 `terraform apply`, **rebuild and redistribute the installer** with `scripts/package-client.sh` (a stamped installer carries its own catalog), and have engineers run the new
 installer's `update` (machine policy) and, for a personal model setting, `downgrade` or `reset`. The pins then resolve to the ids you chose and the gateway policy starts everyone on the default; the other entries stay available by name. A family with entries but no pin is warned about (the Models page, the installer, `/api/models`).
-To go back, restore the edits. Full walkthrough: [INSTALL.md section 7](INSTALL.md#7-models-enable-sonnet-46-and-opus-46).
+To go back, restore the edits. Full walkthrough: [INSTALL.md section 7](INSTALL.md#7-models-the-default-sonnet-46-and-opus-46).
 
-**Region.** Claude 4.6 is served on Vertex AI from `global`, `us-east5`, `europe-west1` and `asia-southeast1`, **not** `europe-west2`. The default
+**Region.** Haiku 5.5: check Model Garden. Claude 4.6 is served on Vertex AI from `global`, `us-east5`, `europe-west1` and `asia-southeast1`, **not** `europe-west2`. The default
 `vertex_region = "global"` works. If an upstream uses another region while a 4.6 entry is enabled, `terraform plan` prints a warning from the check
 `claude_4_6_served_in_upstream_regions` (a warning, not an error, because Google's list can change): use `global`, add an upstream in a supported
 region, or set `"enabled": false` on the 4.6 entries. Cloud Run itself may live in `europe-west2`; only the model location matters.
@@ -399,7 +402,7 @@ Only for `app_access = "iap"`, `gateway_exposure = "internal_lb"` or `analytics 
   during the last 60 days (`check "gateway_leaf_expiry"`, evaluated when a state exists); `terraform output gateway_cert_expires` has the date. Rotate on purpose, after announcing it:
   `terraform apply -replace='tls_locally_signed_cert.gateway_leaf[0]'`. After it has expired the next apply replaces it. A TLS failure never reaches Cloud Run's request metrics, so the 5xx alerts stay quiet: put the date in a calendar,
   or probe `https://<gateway_hostname>/healthz` from inside the network. (There is no Terraform alert on load balancer health or certificate expiry: the metric names could not be verified offline.)
-* **First-apply ordering that the plan cannot prove.** (1) The IAP service agent: Terraform asks Google to create it (`gcloud beta services identity create`, best effort, needs `gcloud` on the machine
+* **First-apply ordering that the plan cannot prove.** (1) The IAP service agent: Terraform asks Google to create it (`gcloud services identity create`, falling back to `gcloud beta ...`; best effort, needs `gcloud` on the machine
   that applies; `iap_create_agent_with_gcloud = false` skips it) before it grants the agent `run.invoker`; if the grant still stops with "service account ... does not exist", run that command by hand and apply
   again. (2) With `app_domain`, the load balancer's serverless NEG is created before the Cloud Run service it names (a reference would be a dependency cycle through `IAP_AUDIENCE`). If Google refuses that, set
   `app_domain = null`, apply (the service is created with direct IAP), set `app_domain` again and apply. (3) The lb and proxy-only subnets are created after the Service Networking range (a /16 that Google chooses

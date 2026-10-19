@@ -30,7 +30,9 @@ export function tierOf(catalog, model) {
 }
 
 // What a catalog entry means for coaching: its tier when that is default/upgrade/fast, otherwise (e.g. "previous") the role of its family,
-// so Opus 4.6 counts as the premium model and Sonnet 4.6 as a default-class one, wherever the admin pinned them.
+// so Opus 4.6 counts as the premium model and the Sonnets as routine ones, wherever the admin pinned them. Only the premium role triggers
+// advice: with Haiku as the shipped default nothing is called "premium" except Opus, and the "not tried the fast model" nudge needs a
+// catalog entry whose tier is "fast" (the shipped catalog has none, because the cheap model is already everyone's starting point).
 const ROLE_BY_FAMILY = { sonnet: 'default', opus: 'upgrade', haiku: 'fast' };
 export function roleOf(entry) {
   if (!entry) return 'other';

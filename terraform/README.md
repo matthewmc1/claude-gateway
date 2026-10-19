@@ -54,7 +54,7 @@ log sink and dataset for analysts.
 | `analytics_readers`, `analytics_retention_days`, `analytics_include_emails` | `analytics = "bigquery"`: who may query the analyst view (separate dataset), retention, e-mail column |
 
 Models are not a variable: edit [`../config/models.json`](../config/models.json) and apply. It drives the gateway policy,
-the `sonnet`/`opus`/`haiku` aliases pinned for every engineer (only for entries that pin their family; Sonnet 4.6 and Opus 4.6 are allowed but not pinned until you switch the default, see docs/DEPLOY.md section 6) and the budget app. A `check` block (`model_regions.tf`) warns when an upstream region does not serve an enabled Claude 4.6 model.
+the `sonnet`/`opus`/`haiku` aliases pinned for every engineer (only for entries that pin their family; as shipped Haiku 5.5 is the default, Sonnet 4.6 is the Sonnet pin, Opus 5.5 the Opus pin, and Sonnet 5.5 and Opus 4.6 are allowed by name; see docs/DEPLOY.md section 6) and the budget app. A `check` block (`model_regions.tf`) warns when an upstream region does not serve an enabled Claude 4.6 model.
 
 ## Files
 

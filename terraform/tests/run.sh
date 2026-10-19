@@ -41,9 +41,10 @@ rsync -a --exclude 'terraform.tfstate*' --exclude terraform.tfvars --exclude zz_
   --exclude .terraform --exclude '.terraform.lock.hcl' --exclude 'secrets.auto.tfvars' --exclude 'backend.tf' \
   --exclude 'terraform.tfvars.bak*' --exclude tests "$TF_SRC/" "$TF/"
 cp "$REPO/config/models.json" "$BASE/config/models.json"
-# The fixtures below were written against the 5.5-default catalog; derive that state from the real file (shipped default: Sonnet 4.6)
-# so they keep testing the rules, and test the real file itself where it matters (the root plan, "real models.json").
-jq '.default = "sonnet" | (.models[] | select(.alias=="sonnet")) |= del(.pin) | (.models[] | select(.alias=="sonnet") | .tier) = "default" | (.models[] | select(.alias=="sonnet-4-6") | .pin) = false | (.models[] | select(.alias=="sonnet-4-6") | .tier) = "previous"' "$BASE/config/models.json" >"$S/models.orig.json"
+# The fixtures below were written against the Sonnet 5.5-default catalog (models.orig.json: Sonnet 5.5 default and pin, Haiku "fast", the
+# 4.6 entries allowed by name); derive that state from the real file (shipped default: Haiku 5.5) so they keep testing the rules, and test
+# the real file itself where it matters (the root plan, "real models.json", the "shipped catalog" render, the Sonnet 4.6 default recipe).
+jq '.default = "sonnet" | (.models[] | select(.alias=="sonnet")) |= del(.pin) | (.models[] | select(.alias=="sonnet") | .tier) = "default" | (.models[] | select(.alias=="sonnet-4-6") | .pin) = false | (.models[] | select(.alias=="sonnet-4-6") | .tier) = "previous" | (.models[] | select(.alias=="haiku") | .tier) = "fast"' "$BASE/config/models.json" >"$S/models.orig.json"
 cp "$BASE/config/models.json" "$S/models.shipped.json"
 
 cat > "$S/fake.tfvars" <<'TFV'
@@ -53,7 +54,7 @@ app_image_tag         = "20261013093000"
 admin_users           = [{ email = "alice@example.com", name = "Alice" }, { email = "bob@example.com" }]
 allowed_email_domains = ["example.com"]
 oidc                  = { client_id = "123456789012-abcdef123456.apps.googleusercontent.com" }
-oidc_client_secret    = "fake-client-secret-value"
+oidc_client_secret    = "GOCSPX-fake-client-secret-value0"
 TFV
 
 tf() { ( cd "$TF" && terraform "$@" ); }
@@ -84,6 +85,13 @@ section "format, init, validate"
 if tf fmt -check -recursive -no-color >/dev/null; then ok "terraform fmt -check -recursive"; else bad "terraform fmt -check"; tf fmt -check -recursive -diff -no-color | head -20; fi
 if tf init -backend=false -input=false -no-color >"$S/out/init.log" 2>&1; then ok "terraform init -backend=false"; else bad "terraform init"; tail -20 "$S/out/init.log"; fi
 if tf validate -no-color >"$S/out/validate.log" 2>&1; then ok "terraform validate"; else bad "terraform validate"; cat "$S/out/validate.log"; fi
+
+# ONLY_OIDC=1 (or running tests/oidc.sh directly): just the sign-in tests, after the init above.
+if [[ "${ONLY_OIDC:-0}" == 1 ]]; then
+  source "$HERE/oidc.sh"
+  printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
+  [[ $FAIL == 0 ]]; exit
+fi
 
 # ============================================================================================================================
 section "default plan (2 admins, trial profile)"
@@ -116,7 +124,7 @@ for v in APP_STATE_BUCKET GATEWAY_SERVICE_NAME USAGE_SOURCE SCHEDULER_SA MODELS_
   [[ " $ENVS" == *" $v "* ]] && ok "app env has $v" || bad "app env missing $v"
 done
 assert "app env: USAGE_SOURCE=logs, APP_VIEW_ACCESS=open, GATEWAY_SERVICE_NAME=claude-gateway" "$P" '.resource_changes[] | select(.type=="google_cloud_run_v2_service" and .name=="app") | [.change.after.template[0].containers[0].env[] | select(.value != null) | {(.name): .value}] | add | (.USAGE_SOURCE=="logs" and .APP_VIEW_ACCESS=="open" and .GATEWAY_SERVICE_NAME=="claude-gateway")'
-assert "MODELS_JSON passes the catalog (5 models incl. Sonnet 4.6 and Opus 4.6, default sonnet-4-6)" "$P" '.resource_changes[] | select(.type=="google_cloud_run_v2_service" and .name=="app") | [.change.after.template[0].containers[0].env[] | select(.name=="MODELS_JSON") | .value][0] | fromjson | (.default=="sonnet-4-6" and (.models|length)==5 and ([.models[].id] | (contains(["claude-sonnet-4-6","claude-opus-4-6"]))))'
+assert "MODELS_JSON passes the catalog (5 models incl. Sonnet 4.6 and Opus 4.6, default haiku)" "$P" '.resource_changes[] | select(.type=="google_cloud_run_v2_service" and .name=="app") | [.change.after.template[0].containers[0].env[] | select(.name=="MODELS_JSON") | .value][0] | fromjson | (.default=="haiku" and (.models|length)==5 and ([.models[].id] | (contains(["claude-sonnet-4-6","claude-opus-4-6"]))))'
 assert "the system key and read key are secret-backed (no plaintext env)" "$P" '.resource_changes[] | select(.type=="google_cloud_run_v2_service" and .name=="app") | [.change.after.template[0].containers[0].env[] | select(.name=="GATEWAY_SYSTEM_WRITE_KEY" or .name=="GATEWAY_ADMIN_READ_KEY") | (.value == null or .value == "")] | all'
 assert "log retention is not managed by default (project-wide bucket untouched)" "$P" '[.resource_changes[] | select(.type=="google_logging_project_bucket_config")] | length == 0'
 assert "outputs: client_defaults, oidc_redirect_uri, oidc_setup_steps, proxy_command, client_install_hint, admin_credentials exist" "$P" '.output_changes | (has("client_defaults") and has("oidc_redirect_uri") and has("oidc_setup_steps") and has("oidc_console_url") and has("oidc_consent_screen_url") and has("proxy_command") and has("client_install_hint") and has("admin_credentials"))'
@@ -345,7 +353,9 @@ FILT='.resource_changes[] | select(.type=="google_logging_metric") | select(.cha
 assert "spend-cap metric keys on evt=spend.blocked (the gateway writes no inference event for a block)" "$P" "${FILT/NAME/claude_gateway_spend_cap_blocks} | (contains(\"evt=\") and contains(\"spend.blocked\") and (contains(\"429\")|not) and (contains(\"upstream\")|not) and (contains(\"inference\")|not))"
 assert "auth.denied metric excludes the routine reason=invalid_token (expired sessions)" "$P" "${FILT/NAME/claude_gateway_auth_denied} | (contains(\"auth.denied\") and contains(\"NOT jsonPayload.reason=\") and contains(\"invalid_token\"))"
 assert "invalid_token denials are still counted, in their own (dashboard-only) metric" "$P" "${FILT/NAME/claude_gateway_auth_invalid_token} | (contains(\"auth.denied\") and contains(\"jsonPayload.reason=\") and contains(\"invalid_token\") and (contains(\"NOT\")|not))"
-assert "security-denials alert does not include the invalid_token metric" "$P" '[.resource_changes[] | select(.type=="google_monitoring_alert_policy") | .change.after | select(.display_name|test("auth and admin denials")) | .conditions[0].condition_threshold[0].filter] | (length==1 and (.[0]|contains("claude_gateway_auth_denied") and contains("claude_gateway_admin_denied") and (contains("invalid_token")|not)))'
+assert "security-denials alert: one condition per metric (a condition may name only one), none of them the invalid_token one" "$P" '[.resource_changes[] | select(.type=="google_monitoring_alert_policy") | .change.after | select(.display_name|test("auth and admin denials")) | [.conditions[].condition_threshold[0].filter]] | (length==1 and (.[0]|length)==3 and (.[0]|all(.[]; ([match("logging.googleapis.com/user/[a-z_]+";"g")]|length)==1 and (contains("invalid_token")|not))) and (.[0]|any(.[]; contains("claude_gateway_auth_denied"))) and (.[0]|any(.[]; contains("claude_gateway_admin_denied"))) and (.[0]|any(.[]; contains("claude_app_login_failed"))))'
+assert "no alert condition names more than one logs-based metric (Cloud Monitoring refuses it), and every one restricts resource.type" "$P" '[.resource_changes[] | select(.type=="google_monitoring_alert_policy") | .change.after.conditions[] | (.condition_threshold[0].filter // .condition_absent[0].filter) | select(contains("logging.googleapis.com/user/"))] | all(.[]; ([match("logging.googleapis.com/user/";"g")]|length)==1 and contains("resource.type="))'
+assert "scheduler-failure alert reads the metric from Cloud Scheduler's resource type" "$P" '[.resource_changes[] | select(.type=="google_monitoring_alert_policy") | .change.after | select(.display_name|test("scheduler")) | .conditions[].condition_threshold[0].filter // empty | select(contains("claude_scheduler_failures"))] | (length==1 and (.[0]|contains("resource.type=\"cloud_scheduler_job\"")))'
 assert "upstream-error metric matches the real text line and the inference status" "$P" "${FILT/NAME/claude_gateway_upstream_errors} | (contains(\"upstream [45][0-9][0-9]\") and contains(\"jsonPayload.status>=500\"))"
 # the regexes above are checked against real log lines (a 403/404/429 'warn vertex upstream' line and the e2e fixture)
 if grep -E 'warn vertex upstream [45][0-9][0-9] request_id=' "$REPO/tests/e2e/fixtures/gateway-sample.log" >/dev/null 2>&1; then ok "real fixture has 'warn vertex upstream <4xx/5xx> request_id=' lines (what the upstream-error filter matches)"; else bad "fixture lost the upstream warn lines"; fi
@@ -391,7 +401,7 @@ read -r G3 A3 <<<"$(secrets_plan s3 jwt0 read-ROTATED sess0 sys0 db0 2>/dev/null
 read -r G4 A4 <<<"$(secrets_plan s4 jwt0 read0 sess0 sys0 db-ROTATED 2>/dev/null)"; [[ -n "$G4" && "$G4" != "$G0" && "$A4" == "$A0" ]] && ok "rotating the database password changes the gateway's hash (postgres url)" || bad "db rotation: '$G4' '$A4'"
 read -r G5 A5 <<<"$(secrets_plan s5 jwt0 read0 sess-ROTATED sys0 db0 2>/dev/null)"; [[ -n "$A5" && "$A5" != "$A0" && "$G5" == "$G0" ]] && ok "rotating the app session secret changes the app's hash only" || bad "session rotation: '$G5' '$A5'"
 read -r G6 A6 <<<"$(secrets_plan s6 jwt0 read0 sess0 sys-ROTATED db0 2>/dev/null)"; [[ -n "$A6" && "$A6" != "$A0" && "$G6" != "$G0" ]] && ok "rotating the system key changes both (the gateway config embeds it, the app reads it)" || bad "system key rotation: '$G6' '$A6'"
-read -r G7 A7 <<<"$(secrets_plan s7 jwt0 read0 sess0 sys0 db0 "$(tfv s7 <<<'oidc_client_secret = "a-different-oidc-client-secret"')" 2>/dev/null)"; [[ -n "$G7" && "$G7" != "$G0" && "$A7" == "$A0" ]] && ok "filling in / changing the OIDC client secret changes the gateway's hash (placeholder -> real secret rolls the gateway)" || bad "oidc secret: '$G7' '$A7'"
+read -r G7 A7 <<<"$(secrets_plan s7 jwt0 read0 sess0 sys0 db0 "$(tfv s7 <<<'oidc_client_secret = "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et"')" 2>/dev/null)"; [[ -n "$G7" && "$G7" != "$G0" && "$A7" == "$A0" ]] && ok "filling in / changing the OIDC client secret changes the gateway's hash (placeholder -> real secret rolls the gateway)" || bad "oidc secret: '$G7' '$A7'"
 read -r G8 A8 <<<"$(secrets_plan s8 jwt0 read0 sess0 sys0 db0 "$(tfv s8 <<<'oidc_client_secret = null')" 2>/dev/null)"; [[ -n "$G8" && "$G8" != "$G0" ]] && ok "the placeholder OIDC secret hashes differently from a real one" || bad "placeholder oidc hash"
 assert "SECRETS_HASH is not sensitive (a digest, safe in the revision) and the value is not a secret itself" "$S/out/sv-s0.json" '[.resource_changes[] | select(.type=="google_cloud_run_v2_service") | .change.after_sensitive.template[0].containers[0].env[] | select(.value==true)] | length == 0'
 # old behaviour: CONFIG_HASH alone cannot see these
@@ -452,7 +462,7 @@ for spec in 'boost overdue, cap NOT restored|claude_app_override_overdue|0|600|C
   IFS='|' read -r nm met thr per sev <<<"$spec"
   assert "alert '$nm': metric $met, fires at ${thr}+1 events, window ${per}s, severity $sev" "$P" "[$ALERT | select(.display_name | endswith(\"$nm\")) | {c: .conditions[0].condition_threshold[0], s: .severity}] | (length==1 and .[0].c.filter==\"metric.type=\\\"logging.googleapis.com/user/$met\\\" AND resource.type=one_of(\\\"cloud_run_revision\\\", \\\"cloud_run_job\\\")\" and .[0].c.threshold_value==$thr and .[0].c.aggregations[0].alignment_period==\"${per}s\" and .[0].s==\"$sev\")"
 done
-assert "alert 'tick or usage ingest failing': both metrics, 3 or more in 15 minutes" "$P" "[$ALERT | select(.display_name | endswith(\"tick or usage ingest failing\")) | .conditions[0].condition_threshold[0]] | (length==1 and (.[0].filter|contains(\"claude_app_tick_error\") and contains(\"claude_app_usage_ingest_error\")) and .[0].threshold_value==2 and .[0].aggregations[0].alignment_period==\"900s\")"
+assert "alert 'tick or usage ingest failing': one condition per metric, 3 or more in 15 minutes" "$P" "[$ALERT | select(.display_name | endswith(\"tick or usage ingest failing\")) | [.conditions[].condition_threshold[0]]] | (length==1 and (.[0]|length)==2 and (.[0]|map(.filter)|any(.[]; contains(\"claude_app_tick_error\")) and any(.[]; contains(\"claude_app_usage_ingest_error\"))) and (.[0]|all(.[]; .threshold_value==2 and .aggregations[0].alignment_period==\"900s\")))"
 assert "every app-event alert's documentation carries the runbook step (compare each active boost's cap, cancel from the Activity page)" "$P" "[$ALERT | select(.display_name | test(\"boost|override state\")) | .documentation[0].content | select(contains(\"Activity page\") and contains(\"personal cap\"))] | length == 5"
 assert "tick-missing alert: absence of the app's tick heartbeat for 5 minutes, only for the default every-minute schedule" "$P" "[$ALERT | select(.display_name == \"Claude budget app: scheduler tick missing\") | .conditions[0].condition_absent[0]] | (length==1 and .[0].duration==\"300s\" and (.[0].filter|contains(\"claude_app_tick\")))"
 plan slowtick "$(tfv slowtick <<<'tick_schedule = "*/10 * * * *"')" && assert "slower tick_schedule: no tick-missing alert (it would fire constantly); the rest stay" "$S/out/slowtick.json" '[.resource_changes[] | select(.type=="google_monitoring_alert_policy") | .change.after.display_name | select(test("tick missing"))] | length == 0' || bad "slowtick plan"
@@ -572,12 +582,19 @@ if render a3 "$S/models.orig.json" "$UP2" "$ADM3" '{"access_type":"offline","pro
   assert "extra auth params (access_type, prompt, hd) rendered" "$(Y a3)" '.oidc.extra_auth_params == {"access_type":"offline","prompt":"consent","hd":"example.com"}'
 else bad "render a3"; tail -12 "$S/out/r_a3.log"; fi
 
-# the catalog as shipped: Sonnet 4.6 is the starting model and the Sonnet pin; Opus stays on 5.5
+# the catalog as shipped: Haiku 5.5 is the starting model; Sonnet 4.6 is the Sonnet pin, Opus stays on 5.5, Sonnet 5.5 and Opus 4.6 are allowed by name
 if render shipped "$S/models.shipped.json" "$UP1" "$ADM1"; then
-  assert "shipped catalog: availableModels starts with Sonnet 4.6 and allows everything else" "$(Y shipped)" ".managed.policies[0].code | (.availableModels==[\"$S46\",\"$SON\",\"$OPU\",\"$HAI\",\"$O46\"] and .enforceAvailableModels==true)"
-  assert "shipped catalog: the policy starts everyone on Sonnet 4.6" "$(Y shipped)" ".managed.policies[0].code | (.model==\"$S46\" and .model==.availableModels[0])"
+  assert "shipped catalog: availableModels starts with Haiku 5.5 and allows everything else" "$(Y shipped)" ".managed.policies[0].code | (.availableModels==[\"$HAI\",\"$SON\",\"$OPU\",\"$S46\",\"$O46\"] and .enforceAvailableModels==true)"
+  assert "shipped catalog: the policy starts everyone on Haiku 5.5" "$(Y shipped)" ".managed.policies[0].code | (.model==\"$HAI\" and .model==.availableModels[0])"
   assert "shipped catalog: pins are Sonnet 4.6, Opus 5.5, Haiku 5.5" "$(Y shipped)" ".managed.policies[0].code.env == {\"ANTHROPIC_DEFAULT_SONNET_MODEL\":\"$S46\",\"ANTHROPIC_DEFAULT_OPUS_MODEL\":\"$OPU\",\"ANTHROPIC_DEFAULT_HAIKU_MODEL\":\"$HAI\"}"
+  assert "shipped catalog: the module outputs agree (available_models starts with Haiku 5.5, env_pins has the Sonnet 4.6 pin)" "$S/out/r_shipped.json" ".planned_values.outputs | (.available_models.value[0]==\"$HAI\" and .env_pins.value.ANTHROPIC_DEFAULT_SONNET_MODEL==\"$S46\")"
 else bad "render shipped"; tail -12 "$S/out/r_shipped.log"; fi
+# docs/INSTALL.md "make Sonnet 4.6 the default": default sonnet-4-6 and the tiers swapped with haiku, pins untouched
+jq '.default = "sonnet-4-6" | (.models[] | select(.alias=="sonnet-4-6") | .tier) = "default" | (.models[] | select(.alias=="haiku") | .tier) = "fast"' "$S/models.shipped.json" >"$S/m_s46default.json"
+if render s46default "$S/m_s46default.json" "$UP1" "$ADM1"; then
+  assert "Sonnet 4.6 default recipe: Sonnet 4.6 first, every enabled model still allowed, the policy starts on it" "$(Y s46default)" ".managed.policies[0].code | (.availableModels==[\"$S46\",\"$SON\",\"$OPU\",\"$HAI\",\"$O46\"] and .model==\"$S46\")"
+  assert "Sonnet 4.6 default recipe: the pins do not move" "$(Y s46default)" ".managed.policies[0].code.env == {\"ANTHROPIC_DEFAULT_SONNET_MODEL\":\"$S46\",\"ANTHROPIC_DEFAULT_OPUS_MODEL\":\"$OPU\",\"ANTHROPIC_DEFAULT_HAIKU_MODEL\":\"$HAI\"}"
+else bad "render s46default"; tail -12 "$S/out/r_s46default.log"; fi
 
 # models disabled / default switched / 4th model
 jq '(.models[] | select(.alias=="opus") | .enabled) = false' "$S/models.orig.json" >"$S/m_noopus.json"
@@ -683,7 +700,7 @@ iap_allowed_domains = ["example.com"]
 TFV
 )" && {
   I="$S/out/iapd.json"
-  assert "app: ingress ALL, iap_enabled, launch stage BETA, no scheduler custom audience" "$I" "$EAPP | (.ingress==\"INGRESS_TRAFFIC_ALL\" and .iap_enabled==true and .launch_stage==\"BETA\" and .custom_audiences==null)"
+  assert "app: ingress ALL, iap_enabled, launch stage left unset (direct IAP is GA since 2026-03-13), no scheduler custom audience" "$I" "$EAPP | (.ingress==\"INGRESS_TRAFFIC_ALL\" and .iap_enabled==true and .launch_stage==null and .custom_audiences==null)"
   assert "app env: APP_AUTH_MODE=iap and IAP_AUDIENCE built from the project NUMBER, region and service name" "$I" "$EAPP | $EENV | (.APP_AUTH_MODE==\"iap\" and .IAP_AUDIENCE==\"/projects/123456789012/locations/europe-west2/services/claude-budget-app\")"
   assert "app env: IAP_ALLOWED_DOMAINS passed, no scheduler identity, no IAP_PUBLIC_KEYS_URL, no foreign origin" "$I" "$EAPP | $EENV | (.IAP_ALLOWED_DOMAINS==\"example.com\" and (has(\"SCHEDULER_SA\")|not) and (has(\"SCHEDULER_AUDIENCE\")|not) and (has(\"IAP_PUBLIC_KEYS_URL\")|not) and .APP_ALLOWED_ORIGINS==\"\" and .APP_ALLOWED_HOST_SUFFIXES==\"\" and .APP_ALLOWED_HOSTS==\"claude-budget-app-123456789012.europe-west2.run.app\")"
   assert "direct IAP: app_url is that same deterministic host (the one the app admits); the tick job gets APP_STATE_BUCKET and the same host list" "$I" "(.planned_values.outputs.app_url.value==\"https://claude-budget-app-123456789012.europe-west2.run.app\") and (.resource_changes[] | select(.type==\"google_cloud_run_v2_job\") | .change.after.template[0].template[0].containers[0].env | [.[] | select(.value != null) | {(.name): .value}] | add | (.APP_STATE_BUCKET==\"fake-gateway-test-claude-gateway-state\" and .APP_ALLOWED_HOSTS==\"claude-budget-app-123456789012.europe-west2.run.app\"))"
@@ -712,9 +729,9 @@ plan iapn "$(tfv iapn <<<'app_access = "iap"')" && {
 plan iap_rel "$(tfv iap_rel <<'TFV'
 app_access = "iap"
 project_number = "123456789012"
-iap_launch_stage = "GA"
+iap_launch_stage = "BETA"
 TFV
-)" && assert "iap_launch_stage = GA leaves the launch stage unset" "$S/out/iap_rel.json" "$EAPP | (.iap_enabled==true and .launch_stage==null)" || bad "iap_launch_stage plan"
+)" && assert "iap_launch_stage = BETA (opt-in) requests the preview flag; the default (GA) leaves it unset" "$S/out/iap_rel.json" "$EAPP | (.iap_enabled==true and .launch_stage==\"BETA\")" || bad "iap_launch_stage plan"
 expect_fail "app_viewers: allUsers is rejected" v_allusers "app_viewers entries must look like" "$(tfv v_allusers <<<'app_access = "iap"
 app_viewers = ["allUsers"]')"
 expect_fail "app_viewers: a bare email is rejected" v_bare "app_viewers entries must look like" "$(tfv v_bare <<<'app_viewers = ["eng@example.com"]')"
@@ -856,6 +873,41 @@ TFV
   assert "checklist covers both halves" "$E" '.planned_values.outputs.edge_next_steps.value | (contains("BUDGET APP BEHIND IAP") and contains("GATEWAY BEHIND A PRIVATE INTERNAL LOAD BALANCER"))'
   assert "no allUsers anywhere (full edge)" "$E" '[.. | strings | select(. == "allUsers" or . == "allAuthenticatedUsers" or startswith("allUsers"))] | length == 0'
 } || { bad "full edge plan"; sed -n 1,25p "$S/out/ent.log"; }
+
+# ---- static API rules ----------------------------------------------------------------------------------------------------
+# A plan does not ask Google; these assertions encode rules the LIVE API enforces (the first real apply taught us that: alert policies
+# were refused although every offline plan passed). Each line names the rule. They are only as good as our reading of Google's docs: the
+# rules are listed, with sources, in docs/INSTALL.md ("Unverified until applied").
+section "enterprise edge: static rules the live Google API enforces (full edge incl. custom domain)"
+plan apirules "$(tfv apirules <<'TFV'
+app_access = "iap"
+app_domain = "claude-budget.example.com"
+gateway_exposure = "internal_lb"
+gateway_hostname = "claude-gateway.corp.example.com"
+project_number = "123456789012"
+iap_oauth_client_id = "123456789012-iapclient.apps.googleusercontent.com"
+iap_oauth_client_secret = "fake-iap-secret"
+analytics = "bigquery"
+TFV
+)" && {
+  A="$S/out/apirules.json"
+  CFG='.configuration.root_module.resources[]'
+  assert "rule: a serverless NEG backend takes NO health check (the API refuses one) - both backend services" "$A" '[.resource_changes[] | select(.type=="google_compute_backend_service" or .type=="google_compute_region_backend_service") | .change.after | select((.health_checks // []) | length > 0)] | length == 0'
+  assert "rule: the gateway's regional INTERNAL_MANAGED backend uses protocol HTTP for its serverless NEG (Google's internal ALB + Cloud Run guide: required but ignored)" "$A" '[.resource_changes[] | select(.type=="google_compute_region_backend_service") | .change.after | select(.protocol=="HTTP" and .load_balancing_scheme=="INTERNAL_MANAGED")] | length == 1'
+  assert "rule: IAP lives on exactly one place: the backend service (custom domain) XOR iap_enabled on the Cloud Run service (Google: cannot be configured on both)" "$A" "([.resource_changes[] | select(.type==\"google_compute_backend_service\") | .change.after.iap[0].enabled] == [true]) and ($EAPP | .iap_enabled == null)"
+  assert "rule: IAP on a backend service that has a custom client sets id AND secret together; the secret is never in clear in the plan output" "$A" '[.resource_changes[] | select(.type=="google_compute_backend_service") | .change.after.iap[0] | (.oauth2_client_id != null)] == [true]'
+  assert "rule: exactly ONE ACTIVE REGIONAL_MANAGED_PROXY subnet per region+VPC is planned, and the forwarding rule uses the PRIVATE lb subnet (never the proxy-only one)" "$A" "([.resource_changes[] | select(.type==\"google_compute_subnetwork\" and .change.after.purpose==\"REGIONAL_MANAGED_PROXY\") | .change.after | select(.role==\"ACTIVE\")] | length == 1) and ([.resource_changes[] | select(.type==\"google_compute_subnetwork\" and .name==\"lb\") | .change.after.purpose // \"PRIVATE\"] == [\"PRIVATE\"]) and ([$CFG | select(.address==\"google_compute_forwarding_rule.gateway\") | .expressions.subnetwork.references[]] | index(\"google_compute_subnetwork.lb[0].id\") != null) and ([$CFG | select(.address==\"google_compute_forwarding_rule.gateway\") | .expressions.subnetwork.references[]] | index(\"google_compute_subnetwork.proxy_only[0].id\") == null)"
+  assert "rule: the forwarding rule waits for the proxy-only subnet (an ACTIVE one must exist in the region first)" "$A" "[$CFG | select(.address==\"google_compute_forwarding_rule.gateway\") | .depends_on[]] | index(\"google_compute_subnetwork.proxy_only\") != null"
+  assert "rule: an internal Application LB uses the REGIONAL self-managed certificate and the REGIONAL ssl policy/proxy/url map (no global kinds)" "$A" '([.resource_changes[] | select(.type=="google_compute_ssl_certificate" or .type=="google_compute_target_https_proxy" and .name=="gateway" or .type=="google_compute_url_map" and .name=="gateway")] | length == 0) and ([.resource_changes[] | select(.type=="google_compute_region_ssl_certificate")] | length == 1)'
+  assert "rule: the serverless NEGs are in the Cloud Run region (same region as the service, the backend service and the forwarding rule)" "$A" '([.resource_changes[] | select(.type=="google_compute_region_network_endpoint_group" or .type=="google_compute_region_backend_service" or .type=="google_compute_forwarding_rule" or .type=="google_compute_region_url_map" or .type=="google_compute_region_target_https_proxy") | .change.after.region] | unique == ["europe-west2"]) and ([.resource_changes[] | select(.type=="google_cloud_run_v2_service") | .change.after.location] | unique == ["europe-west2"])'
+  assert "rule: invoker_iam_disabled only ever together with ingress INTERNAL_LOAD_BALANCER (never ALL), and the gateway's run.app URL is off; an app behind the custom-domain LB has its URL off too" "$A" "($EGW | (.invoker_iam_disabled==true and .ingress==\"INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER\" and .default_uri_disabled==true)) and ([.resource_changes[] | select(.type==\"google_cloud_run_v2_service\") | .change.after | select(.invoker_iam_disabled==true and .ingress==\"INGRESS_TRAFFIC_ALL\")] | length == 0) and ($EAPP | (.default_uri_disabled==true and .ingress==\"INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER\"))"
+  assert "rule: Cloud Scheduler needs an OAuth token (not OIDC) for any *.googleapis.com target, with the cloud-platform scope" "$A" '[.resource_changes[] | select(.type=="google_cloud_scheduler_job") | .change.after.http_target[0] | select(.uri|test("^https://[a-z0-9.-]*googleapis.com/")) | select((.oauth_token|length)==1 and (.oidc_token|length)==0 and .oauth_token[0].scope=="https://www.googleapis.com/auth/cloud-platform")] | length == 1'
+  assert "rule: the scheduler URI names the planned job and region exactly (jobs/<name>:run in the job's location)" "$A" '([.resource_changes[] | select(.type=="google_cloud_run_v2_job") | .change.after | "https://run.googleapis.com/v2/projects/fake-gateway-test/locations/" + .location + "/jobs/" + .name + ":run"] ) == ([.resource_changes[] | select(.type=="google_cloud_scheduler_job") | .change.after.http_target[0].uri])'
+  assert "rule: every resource family is covered by an API the config enables (compute, dns, iap, run, cloudscheduler, bigquery, servicenetworking)" "$A" '([.resource_changes[] | select(.type=="google_project_service") | .change.after.service]) as $svc | ([.resource_changes[] | select(.change.actions != ["no-op"]) | .type] | unique) as $t | (($t | map(select(startswith("google_compute_"))) | length == 0) or ($svc | index("compute.googleapis.com") != null)) and (($t | map(select(startswith("google_dns_"))) | length == 0) or ($svc | index("dns.googleapis.com") != null)) and (($t | map(select(startswith("google_iap_"))) | length == 0) or ($svc | index("iap.googleapis.com") != null)) and (($t | map(select(startswith("google_cloud_run_"))) | length == 0) or ($svc | index("run.googleapis.com") != null)) and (($t | map(select(startswith("google_cloud_scheduler_"))) | length == 0) or ($svc | index("cloudscheduler.googleapis.com") != null)) and (($t | map(select(startswith("google_bigquery_"))) | length == 0) or ($svc | index("bigquery.googleapis.com") != null)) and (($svc | index("servicenetworking.googleapis.com")) != null)'
+  assert "rule: the legacy IAP OAuth brand/client resources (IAP OAuth Admin APIs shut down 2026-03-19) are not used" "$A" '[.resource_changes[] | select(.type=="google_iap_brand" or .type=="google_iap_client")] | length == 0'
+  assert "rule: nothing creates a service-account key (organisations commonly enforce iam.disableServiceAccountKeyCreation)" "$A" '[.resource_changes[] | select(.type=="google_service_account_key")] | length == 0'
+  assert "rule: private DNS names end in a dot and the zone is private AND attached to a VPC (a private zone with no network is refused)" "$A" '([.resource_changes[] | select(.type=="google_dns_managed_zone") | .change.after | select(.visibility=="private" and (.dns_name|endswith(".")) and ((.private_visibility_config[0].networks|length) == 1))] | length == 1) and ([.resource_changes[] | select(.type=="google_dns_record_set") | .change.after | select(.name|endswith("."))] | length == 1)'
+} || { bad "static API rules plan"; sed -n 1,25p "$S/out/apirules.log"; }
 
 # gateway.yaml: trusted_proxies / allow_cidrs (module in a throwaway root, as above)
 R2="$S/render2"; mkdir -p "$R2"
@@ -1085,6 +1137,87 @@ done
 assert "example trial-iam: no edge resources" "$S/out/ex_trial-iam.json" '[.resource_changes[] | select(.type|test("^tls_|^google_dns_|^google_iap_|google_cloud_run_v2_job|google_compute_forwarding_rule"))] | length == 0'
 assert "example enterprise-iap-ilb: IAP direct + internal load balancer + job" "$S/out/ex_enterprise-iap-ilb.json" '([.resource_changes[] | select(.type=="google_compute_forwarding_rule")] | length == 1) and ([.resource_changes[] | select(.type=="google_iap_web_cloud_run_service_iam_member")] | length == 2) and ([.resource_changes[] | select(.type=="google_cloud_run_v2_job")] | length == 1) and ([.resource_changes[] | select(.type=="google_compute_global_forwarding_rule")] | length == 0)'
 assert "example enterprise-iap-custom-domain: both load balancers, IAP on the backend service" "$S/out/ex_enterprise-iap-custom-domain.json" '([.resource_changes[] | select(.type=="google_compute_forwarding_rule")] | length == 1) and ([.resource_changes[] | select(.type=="google_compute_global_forwarding_rule")] | length == 1) and ([.resource_changes[] | select(.type=="google_iap_web_backend_service_iam_member")] | length == 2)'
+
+# ============================================================================================================================
+# sign-in (OIDC) rules: tests/oidc.sh, same harness
+source "$HERE/oidc.sh"
+
+# ============================================================================================================================
+section "API-level rules that only the live Google API enforces (tests/apirules.rb)"
+# `terraform plan` accepts any string for an alert filter; the first real apply answered 400 to three of ours. apirules.rb encodes the rules
+# we know (R1-R9 Cloud Monitoring / Logging, I1-I7 Cloud Run, Scheduler, load balancer, Cloud SQL) and runs over EVERY plan this suite made,
+# i.e. every topology and profile (trial, production, iap direct, iap + custom domain, internal_lb, both, with and without the tick job).
+AR="$HERE/apirules.rb"
+PLANS=(); for f in "$S"/out/*.json; do jq -e 'has("resource_changes")' "$f" >/dev/null 2>&1 && PLANS+=("$f"); done
+if (( ${#PLANS[@]} == 0 )); then ok "(apirules skipped: no plan JSON was produced above, the plan steps already failed)"; else
+(( ${#PLANS[@]} >= 20 )) && ok "apirules: ${#PLANS[@]} plan files to check (every topology and profile planned above)" || bad "apirules: only ${#PLANS[@]} plan files found"
+AROUT="$(ruby "$AR" "${PLANS[@]}" 2>&1)"; ARRC=$?
+if (( ARRC == 0 )); then ok "apirules: no violation in any of ${#PLANS[@]} plans"; else bad "apirules: violations"; grep -A12 '^FAIL' <<<"$AROUT" | head -60; fi
+for n in base prod iapd iapn dom ilb ent ex_trial-iam ex_enterprise-iap-ilb ex_enterprise-iap-custom-domain nomon; do
+  [[ -f "$S/out/$n.json" ]] || { bad "apirules: no plan $n to report on"; continue; }
+  grep -q "^OK $n:" <<<"$AROUT" && ok "apirules $n: $(grep "^OK $n:" <<<"$AROUT" | cut -d: -f2- | sed 's/^ //')" || bad "apirules $n did not pass"
+done
+# the checker really looked at the things it claims to: conditions on the job resource type under IAP, absence conditions, the dashboard
+grep "^OK iapd:" <<<"$AROUT" | grep -qE ' [1-9][0-9]* threshold \+ [1-9][0-9]* absence' && ok "apirules iapd: threshold and absence conditions were both checked" || bad "apirules iapd: no absence condition was checked"
+assert "apirules coverage: the IAP plan has a condition that names the Cloud Run job resource type, and one on cloud_scheduler_job" "$S/out/iapd.json" '[.resource_changes[] | select(.type=="google_monitoring_alert_policy") | .change.after.conditions[] | (.condition_threshold[0].filter // .condition_absent[0].filter)] | (any(.[]; contains("cloud_run_job")) and any(.[]; contains("cloud_scheduler_job")))'
+# the sslmode the gateway is given matches ENCRYPTED_ONLY (both read from the source, the URL holds a password only known at apply)
+grep -q 'sslmode=require' "$TF/secrets.tf" && grep -q 'ssl_mode *= *"ENCRYPTED_ONLY"' "$TF/main.tf" && ok "Cloud SQL ENCRYPTED_ONLY and the gateway's connection string sslmode=require agree" || bad "Cloud SQL ssl_mode and the connection string's sslmode do not agree"
+# IAP OAuth Admin API (google_iap_brand / google_iap_client) was shut down on 2026-03-19: no source file may use it
+if grep -nE '^resource +"google_iap_(brand|client)"' "$TF"/*.tf >/dev/null 2>&1; then bad "a .tf file uses google_iap_brand/google_iap_client (IAP OAuth Admin API, shut down 2026-03-19)"; else ok "no google_iap_brand / google_iap_client resource (that API is shut down)"; fi
+
+# ---- mutation tests: feed the checker a MUTATED COPY of a plan (never a repo file) and require the rule to fire ----------------------------
+mkdir -p "$S/mut"
+mut() {   # mut <name> <plan name> <jq program turning the plan into the buggy one> <rule code> <text the message must contain>
+  local n="$1" src="$2" prog="$3" code="$4" txt="$5"
+  if ! jq "def pol(n; f): .resource_changes |= map(if .type==\"google_monitoring_alert_policy\" and (.change.after.display_name|test(n)) then (.change.after |= f) else . end);
+           def res(t; f): .resource_changes |= map(if .type==t then (.change.after |= f) else . end); $prog" "$S/out/$src.json" >"$S/mut/$n.json" 2>"$S/mut/$n.err"; then bad "mutation $n: jq failed: $(head -c 200 "$S/mut/$n.err")"; return; fi
+  local o; o="$(ruby "$AR" "$S/mut/$n.json" 2>&1)"
+  if grep -q "$code .*$txt" <<<"$o"; then ok "mutation $n -> $code fires"; else bad "mutation $n: $code '$txt' did not fire. Output: $(grep -m2 -E '^(OK|FAIL|  )' <<<"$o" | cut -c1-200)"; fi
+}
+# control: the unmutated plans pass (a mutation test that fails for any reason would prove nothing)
+grep -q '^OK base:' <<<"$AROUT" && grep -q '^OK iapd:' <<<"$AROUT" && ok "control: unmutated base and iapd pass" || bad "control: unmutated plans do not pass"
+# the three real-apply failures
+mut orig1_no_resource_type base 'pol("provider error"; .conditions[0].condition_threshold[0].filter |= sub(" AND resource.type=one_of\\(.*\\)$"; ""))' R1 'restrict resource.type'
+mut orig2_one_of_metrics base 'pol("auth and admin denials"; .conditions[0].condition_threshold[0].filter = "metric.type=one_of(\"logging.googleapis.com/user/claude_gateway_auth_denied\", \"logging.googleapis.com/user/claude_gateway_admin_denied\") AND resource.type=one_of(\"cloud_run_revision\", \"cloud_run_job\")")' R1 'only ONE metric'
+mut orig3_scheduler_on_cloud_run base 'pol("scheduler tick failing"; .conditions[0].condition_threshold[0].filter |= sub("resource.type=\"cloud_scheduler_job\""; "resource.type=one_of(\"cloud_run_revision\", \"cloud_run_job\")"))' R2 'no overlap'
+# resource type
+mut r2_job_left_out iapd 'pol("boost overdue"; .conditions[0].condition_threshold[0].filter |= sub("one_of\\(.*\\)"; "\"cloud_run_revision\""))' R2 'also comes from cloud_run_job'
+mut r2_unknown_label iapd 'pol("tick job failing"; .conditions[0].condition_threshold[0].filter |= sub("resource.labels.job_name"; "resource.labels.job_id"))' R2 'resource.labels.job_id does not exist on cloud_run_job'
+mut r2_metric_not_in_plan base 'pol("provider error"; .conditions[0].condition_threshold[0].filter |= sub("claude_gateway_upstream_errors"; "claude_gateway_upstream_erors"))' R7 'neither a logging metric'
+# AND / OR
+mut r3_unparenthesised base 'pol("5xx responses"; .conditions[0].condition_threshold[0].filter |= (. + " AND metric.labels.response_code=\"500\" OR metric.labels.response_code=\"503\""))' R3 'mixes AND'
+# conditions
+mut r4_no_conditions base 'pol("provider error"; .conditions = [])' R4 'no condition'
+mut r4_duplicate_names base 'pol("provider error"; .conditions += [.conditions[0]])' R4 'unique'
+mut r4_seven_conditions base 'pol("provider error"; .conditions = [range(7) as $i | (.conditions[0] | .display_name = "c\($i)")])' R4 'allows 1 to 6'
+# aggregations
+mut r5_rate_on_gauge base 'pol("maximum instances"; .conditions[0].condition_threshold[0].aggregations[0].per_series_aligner = "ALIGN_RATE")' R5 'ALIGN_RATE is not valid for a GAUGE'
+mut r5_percentile_on_counter base 'pol("5xx responses"; .conditions[0].condition_threshold[0].aggregations[0].per_series_aligner = "ALIGN_PERCENTILE_95")' R5 'not valid for INT64'
+mut r5_short_period base 'pol("5xx responses"; .conditions[0].condition_threshold[0].aggregations[0].alignment_period = "30s")' R5 'below 60s'
+mut r5_reducer_without_aligner base 'pol("5xx responses"; .conditions[0].condition_threshold[0].aggregations[0].per_series_aligner = "ALIGN_NONE")' R5 'needs a per-series aligner'
+mut r5_rate_on_distribution base 'pol("5xx responses"; .conditions[0].condition_threshold[0] |= (.filter |= sub("run.googleapis.com/request_count"; "run.googleapis.com/request_latencies") | .aggregations[0].per_series_aligner = "ALIGN_RATE"))' R5 'ALIGN_RATE is not valid for DISTRIBUTION'
+mut r5_absence_too_short base 'pol("gateway: no running instance"; .conditions[0].condition_absent[0].duration = "60s")' R5 'at least 120s'
+mut r5_duration_not_minutes base 'pol("maximum instances"; .conditions[0].condition_threshold[0].duration = "90s")' R5 'multiple of 60s'
+mut r6_dashboard_two_metrics base '(res("google_monitoring_dashboard"; .dashboard_json |= (fromjson | .mosaicLayout.tiles[0].widget.xyChart.dataSets[0].timeSeriesQuery.timeSeriesFilter.filter = "metric.type=one_of(\"run.googleapis.com/request_count\", \"run.googleapis.com/request_latencies\")" | tojson)))' R1 'ONE metric'
+mut r8_doc_too_long base 'pol("5xx responses"; .documentation[0].content = ("x" * 9000))' R8 'max 8192'
+mut r9_log_field_typo base 'res("google_logging_metric"; .filter |= sub("jsonPayload"; "jsonpayload"))' R9 'unknown log field jsonpayload'
+# non-monitoring
+mut i1_oidc_for_google_api iapd 'res("google_cloud_scheduler_job"; .http_target[0] |= (.oidc_token = .oauth_token | .oauth_token = []))' I1 'need an oauth_token'
+mut i1_wrong_job_url iapd 'res("google_cloud_scheduler_job"; .http_target[0].uri |= sub(":run$"; ":start"))' I1 'must look like'
+mut i1_deadline iapd 'res("google_cloud_scheduler_job"; .attempt_deadline = "5s")' I1 'attempt_deadline'
+mut i2_probe_timeout base 'res("google_cloud_run_v2_service"; (.template[0].containers[0].startup_probe[0].timeout_seconds) = 30)' I2 'exceeds period_seconds'
+mut i2_probe_port base 'res("google_cloud_run_v2_service"; (.template[0].containers[0].liveness_probe[0].http_get[0].port) = 9999)' I2 'not the container port'
+mut i3_health_check_on_serverless ilb 'res("google_compute_region_backend_service"; .health_checks = ["x"])' I3 'health_checks'
+mut i3_neg_region ilb 'res("google_compute_region_network_endpoint_group"; .region = "us-east1")' I3 'differs from Cloud Run'
+mut i3_proxy_subnet_small ilb 'res("google_compute_subnetwork"; if .purpose == "REGIONAL_MANAGED_PROXY" then .ip_cidr_range = "10.0.2.0/27" else . end)' I3 'smaller than /26'
+mut i3_proxy_subnet_backup ilb 'res("google_compute_subnetwork"; if .purpose == "REGIONAL_MANAGED_PROXY" then .role = "BACKUP" else . end)' I3 'role ACTIVE'
+mut i4_iap_brand base '.resource_changes += [{"address":"google_iap_brand.x","type":"google_iap_brand","name":"x","change":{"actions":["create"],"after":{}}}]' I4 'shut down'
+mut i7_sql_memory base 'res("google_sql_database_instance"; .settings[0].tier = "db-custom-1-1024")' I7 'at least 3840'
+# google provider 7.0 upgrade guide: removed/retyped arguments (enable_flow_logs, retention_period as a number) and the deprecated require_ssl
+if grep -nE '^\s*(enable_flow_logs|retention_period|require_ssl)\s*=' "$TF"/*.tf >/dev/null 2>&1; then bad "a .tf file uses an argument removed or deprecated in google provider 7.x"; else ok "no argument removed in google provider 7.0 (enable_flow_logs, retention_period) or deprecated (require_ssl)"; fi
+grep -q 'google_project_service' "$TF/main.tf" && grep -q 'disable_on_destroy *= *false' "$TF/main.tf" && ok "google_project_service sets disable_on_destroy explicitly (7.0 changed its default)" || bad "google_project_service must set disable_on_destroy explicitly"
+grep -q 'Unverified until applied: Google API rules' "$REPO/docs/INSTALL.md" && ok "docs/INSTALL.md lists the API rules an offline plan cannot prove" || bad "docs/INSTALL.md lost its 'Unverified until applied: Google API rules' section"
+fi
 
 # ============================================================================================================================
 section "live-deployment safety"
