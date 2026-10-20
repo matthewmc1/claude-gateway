@@ -4,18 +4,18 @@
   "main": "index.ts",
   "dependencies": {
     "@expo-google-fonts/inter": "^0.4.2",
-    "@expo/metro-runtime": "~57.0.16",
-    "expo": "~57.0.27",
-    "expo-font": "~57.0.4",
-    "expo-status-bar": "~57.0.1",
-    "react": "19.2.3",
-    "react-dom": "19.2.3",
-    "react-native": "0.86.3",
-    "react-native-svg": "15.15.4",
+    "@expo/metro-runtime": "~58.0.14",
+    "expo": "~58.0.14",
+    "expo-font": "~58.0.8",
+    "expo-status-bar": "~58.0.3",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "react-native": "0.88.0",
+    "react-native-svg": "15.16.0",
     "react-native-web": "^0.21.2"
   },
   "devDependencies": {
-    "@types/react": "~19.2.2",
+    "@types/react": "~19.3.0",
     "typescript": "~6.0.3"
   },
   "scripts": {
